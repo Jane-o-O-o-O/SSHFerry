@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.shared.models import SiteConfig
+from src.ui.theme import TOKENS
 
 
 class SiteEditorDialog(QDialog):
@@ -39,6 +40,10 @@ class SiteEditorDialog(QDialog):
         self.site_config = site_config
         self.setWindowTitle("Edit Site" if site_config else "New Site")
         self.setMinimumWidth(500)
+        self.setStyleSheet(
+            f"QDialog {{ background-color: {TOKENS.bg_surface}; }}"
+            "QTextEdit { min-height: 72px; }"
+        )
 
         self._init_ui()
 

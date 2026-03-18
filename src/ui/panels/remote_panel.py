@@ -6,6 +6,7 @@ from PySide6.QtCore import QByteArray, QMimeData, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.shared.models import RemoteEntry
+from src.ui.theme import TOKENS, alpha_hex
 
 
 class DraggableTreeWidget(QTreeWidget):
@@ -121,26 +123,33 @@ class RemotePanel(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(TOKENS.spacing_sm)
 
         # Navigation bar
-        nav = QHBoxLayout()
+        nav_frame = QFrame()
+        nav_frame.setObjectName("toolbarCard")
+        nav = QHBoxLayout(nav_frame)
+        nav.setContentsMargins(TOKENS.spacing_md, TOKENS.spacing_sm, TOKENS.spacing_md, TOKENS.spacing_sm)
+        nav.setSpacing(TOKENS.spacing_sm)
 
         self.btn_up = QPushButton("..")
+        self.btn_up.setProperty("variant", "ghost")
         self.btn_up.setFixedWidth(30)
         self.btn_up.setToolTip("Go to parent directory")
         self.btn_up.clicked.connect(lambda: self.request_go_up.emit())
         nav.addWidget(self.btn_up)
 
         self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.setProperty("variant", "ghost")
         self.btn_refresh.setFixedWidth(60)
         self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         nav.addWidget(self.btn_refresh)
 
         self.path_label = QLabel("Remote: /")
-        self.path_label.setStyleSheet("font-weight: bold; padding: 2px 5px;")
+        self.path_label.setObjectName("sectionTitle")
         nav.addWidget(self.path_label, stretch=1)
 
-        layout.addLayout(nav)
+        layout.addWidget(nav_frame)
 
         # File tree with drag support
         self.tree = DraggableTreeWidget()
@@ -160,35 +169,11 @@ class RemotePanel(QWidget):
         self.tree.setColumnWidth(1, 60)
         self.tree.setColumnWidth(2, 80)
 
-        # Follow the active Qt palette instead of forcing a light theme.
-        self._base_tree_stylesheet = """
-            QTreeWidget {
-                font-size: 13px;
-                background-color: palette(base);
-                color: palette(text);
-                alternate-background-color: palette(alternate-base);
-                border: 1px solid palette(mid);
-            }
-            QTreeWidget::item {
-                padding: 4px;
-                color: palette(text);
-            }
-            QTreeWidget::item:selected {
-                background-color: palette(highlight);
-                color: palette(highlighted-text);
-            }
-            QTreeWidget::item:hover {
-                background-color: rgba(127, 127, 127, 0.12);
-                color: palette(text);
-            }
-            QHeaderView::section {
-                background-color: palette(window);
-                padding: 6px;
-                font-weight: bold;
-                border: 1px solid palette(mid);
-                color: palette(window-text);
-            }
-        """
+        self.tree.setAlternatingRowColors(True)
+        self._base_tree_stylesheet = (
+            "QTreeWidget { font-size: 13px; padding: 4px; }"
+            "QTreeWidget::item { padding: 6px 4px; }"
+        )
         self.tree.setStyleSheet(self._base_tree_stylesheet)
 
         # Enable drop for receiving files from local panel
@@ -477,12 +462,20 @@ class RemotePanel(QWidget):
         if self._drag_anim_active:
             return
         self._drag_anim_active = True
+        self.tree.setStyleSheet(
+            self._base_tree_stylesheet
+            + (
+                f"QTreeWidget {{ border: 2px solid {TOKENS.success}; "
+                f"background-color: {alpha_hex(TOKENS.success, 0.08)}; }}"
+            )
+        )
         self._drag_saved_current_item = self.tree.currentItem()
         self._drag_saved_selected_items = list(self.tree.selectedItems())
 
     def _stop_drag_animation(self):
         """Restore previous selection state after drag feedback."""
         self._drag_anim_active = False
+        self.tree.setStyleSheet(self._base_tree_stylesheet)
         self.tree.clearSelection()
         for item in self._drag_saved_selected_items:
             item.setSelected(True)

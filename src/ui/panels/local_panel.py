@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileIconProvider,
     QFileSystemModel,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -19,6 +20,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from src.ui.theme import TOKENS, alpha_hex
 
 
 def get_available_drives() -> list[str]:
@@ -119,16 +122,33 @@ class LocalPanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg)
+        layout.setSpacing(TOKENS.spacing_sm)
 
         # Header
-        header = QHBoxLayout()
-        header.addWidget(QLabel("Local"))
+        header_frame = QFrame()
+        header_frame.setObjectName("toolbarCard")
+        header = QHBoxLayout(header_frame)
+        header.setContentsMargins(TOKENS.spacing_md, TOKENS.spacing_sm, TOKENS.spacing_md, TOKENS.spacing_sm)
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(2)
+        title = QLabel("Local Workspace")
+        title.setObjectName("sectionTitle")
+        subtitle = QLabel("Browse local files and receive remote downloads")
+        subtitle.setObjectName("mutedLabel")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        header.addLayout(title_box)
         header.addStretch()
-        layout.addLayout(header)
+        layout.addWidget(header_frame)
 
         # Navigation bar
-        nav = QHBoxLayout()
+        nav_frame = QFrame()
+        nav_frame.setObjectName("toolbarCard")
+        nav = QHBoxLayout(nav_frame)
+        nav.setContentsMargins(TOKENS.spacing_md, TOKENS.spacing_sm, TOKENS.spacing_md, TOKENS.spacing_sm)
+        nav.setSpacing(TOKENS.spacing_sm)
         
         # Drive selector (Windows)
         self.drive_combo = QComboBox()
@@ -139,12 +159,14 @@ class LocalPanel(QWidget):
         nav.addWidget(self.drive_combo)
         
         self.btn_up = QPushButton("..")
+        self.btn_up.setProperty("variant", "ghost")
         self.btn_up.setFixedWidth(30)
         self.btn_up.setToolTip("Go to parent directory")
         self.btn_up.clicked.connect(self._go_up)
         nav.addWidget(self.btn_up)
 
         self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.setProperty("variant", "ghost")
         self.btn_refresh.setFixedWidth(70)
         self.btn_refresh.setToolTip("Refresh")
         self.btn_refresh.clicked.connect(self._refresh)
@@ -154,7 +176,7 @@ class LocalPanel(QWidget):
         self.path_edit.returnPressed.connect(self._on_path_entered)
         nav.addWidget(self.path_edit)
 
-        layout.addLayout(nav)
+        layout.addWidget(nav_frame)
 
         # File system model
         self.icon_provider = QFileIconProvider()
@@ -179,7 +201,12 @@ class LocalPanel(QWidget):
 
         # Hide unnecessary columns (keep Name, Size, Date Modified)
         self.tree.setColumnHidden(2, True)  # Type column
-        self._base_tree_style = self.tree.styleSheet()
+        self.tree.setAlternatingRowColors(True)
+        self._base_tree_style = (
+            "QTreeView { padding: 4px; }"
+            "QTreeView::item { padding: 6px 4px; }"
+        )
+        self.tree.setStyleSheet(self._base_tree_style)
 
         # Enable drop for receiving files from remote
         self.setAcceptDrops(True)
@@ -317,12 +344,20 @@ class LocalPanel(QWidget):
         if self._drag_anim_active:
             return
         self._drag_anim_active = True
+        self.tree.setStyleSheet(
+            self._base_tree_style
+            + (
+                f"QTreeView {{ border: 2px solid {TOKENS.success}; "
+                f"background-color: {alpha_hex(TOKENS.success, 0.08)}; }}"
+            )
+        )
         self._drag_saved_current_index = self.tree.currentIndex()
         self._drag_saved_selected_rows = list(self.tree.selectionModel().selectedRows())
 
     def _stop_drag_animation(self):
         """Restore previous selection state after drag feedback."""
         self._drag_anim_active = False
+        self.tree.setStyleSheet(self._base_tree_style)
         selection_model = self.tree.selectionModel()
         selection_model.clearSelection()
         for idx in self._drag_saved_selected_rows:

@@ -15,6 +15,7 @@ if _src_dir not in sys.path:
 
 if TYPE_CHECKING:
     from src.ui.main_window import MainWindow
+    from PySide6.QtWidgets import QApplication
 
 
 def _runtime_dir() -> Path:
@@ -114,6 +115,12 @@ def _install_exception_hooks() -> None:
     threading.excepthook = _thread_hook
 
 
+def _apply_desktop_theme(app: QApplication) -> None:
+    from src.ui.theme import apply_theme
+
+    apply_theme(app)
+
+
 class WindowManager:
     """Manages multiple MainWindow instances."""
 
@@ -163,6 +170,7 @@ def main():
         app = QApplication(sys.argv)
         app.setApplicationName("SSHFerry")
         app.setOrganizationName("SSHFerry")
+        _apply_desktop_theme(app)
 
         manager = WindowManager.instance(MainWindow)
         manager.create_window()
