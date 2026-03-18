@@ -19,8 +19,8 @@ class ThemeTokens:
     line_soft: str = "#d8d0c3"
     line_strong: str = "#b8aea1"
     text_main: str = "#22313a"
-    text_soft: str = "#5f6d74"
-    text_muted: str = "#78858b"
+    text_soft: str = "#4e5f69"
+    text_muted: str = "#66757c"
     accent: str = "#2f6477"
     accent_strong: str = "#214857"
     accent_soft: str = "#d8e7ec"
@@ -32,11 +32,11 @@ class ThemeTokens:
     success_soft: str = "#dcece2"
     radius_sm: int = 8
     radius_md: int = 12
-    radius_lg: int = 18
+    radius_lg: int = 16
     spacing_xs: int = 6
-    spacing_sm: int = 10
-    spacing_md: int = 14
-    spacing_lg: int = 18
+    spacing_sm: int = 8
+    spacing_md: int = 12
+    spacing_lg: int = 14
 
 
 TOKENS = ThemeTokens()

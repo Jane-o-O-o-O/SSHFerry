@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -16,8 +15,11 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QPushButton,
+    QSizePolicy,
     QSplitter,
+    QStyle,
     QStatusBar,
     QTextEdit,
     QVBoxLayout,
@@ -187,13 +189,14 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg)
-        root_layout.setSpacing(TOKENS.spacing_lg)
+        root_layout.setSpacing(TOKENS.spacing_md)
 
         root_layout.addWidget(self._build_top_bar())
 
         content_shell = QWidget()
         content_layout = QHBoxLayout(content_shell)
         content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
         root_layout.addWidget(content_shell, 1)
 
         left = QFrame()
@@ -204,35 +207,57 @@ class MainWindow(QMainWindow):
         sites_title = QLabel("Sites")
         sites_title.setObjectName("sectionTitle")
         left_lay.addWidget(sites_title)
-        sites_hint = QLabel("Saved endpoints and launch controls")
-        sites_hint.setObjectName("mutedLabel")
-        left_lay.addWidget(sites_hint)
         self.site_list = QListWidget()
         self.site_list.itemClicked.connect(self._on_site_selected)
+        self.site_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.site_list.customContextMenuRequested.connect(self._show_site_context_menu)
         left_lay.addWidget(self.site_list)
 
-        btn_add = QPushButton("Add Site")
-        btn_add.setProperty("variant", "primary")
-        btn_add.clicked.connect(self._add_site)
-        left_lay.addWidget(btn_add)
+        site_actions = QFrame()
+        site_actions.setObjectName("toolbarCard")
+        site_actions_layout = QHBoxLayout(site_actions)
+        site_actions_layout.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm)
+        site_actions_layout.setSpacing(TOKENS.spacing_xs)
 
-        self.btn_edit_site = QPushButton("Edit Site")
+        self.btn_add_site = QPushButton()
+        self.btn_add_site.setProperty("chrome", "icon")
+        self.btn_add_site.setProperty("variant", "primary")
+        self.btn_add_site.setIcon(self.style().standardIcon(QStyle.SP_FileDialogNewFolder))
+        self.btn_add_site.setToolTip("Add Site")
+        self.btn_add_site.clicked.connect(self._add_site)
+        site_actions_layout.addWidget(self.btn_add_site)
+
+        self.btn_edit_site = QPushButton()
+        self.btn_edit_site.setProperty("chrome", "icon")
+        self.btn_edit_site.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        self.btn_edit_site.setToolTip("Edit Site")
         self.btn_edit_site.clicked.connect(self._edit_site)
-        left_lay.addWidget(self.btn_edit_site)
+        site_actions_layout.addWidget(self.btn_edit_site)
 
-        self.btn_remove_site = QPushButton("Remove Site")
-        self.btn_remove_site.clicked.connect(self._remove_site)
-        left_lay.addWidget(self.btn_remove_site)
-
-        self.btn_check_connection = QPushButton("Check Connection")
+        self.btn_check_connection = QPushButton()
+        self.btn_check_connection.setProperty("chrome", "icon")
+        self.btn_check_connection.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        self.btn_check_connection.setToolTip("Check Connection")
         self.btn_check_connection.clicked.connect(self._check_connection)
-        left_lay.addWidget(self.btn_check_connection)
+        site_actions_layout.addWidget(self.btn_check_connection)
 
-        self.btn_new_session = QPushButton("Open Session")
+        self.btn_remove_site = QPushButton()
+        self.btn_remove_site.setProperty("chrome", "icon")
+        self.btn_remove_site.setProperty("variant", "danger")
+        self.btn_remove_site.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+        self.btn_remove_site.setToolTip("Remove Site")
+        self.btn_remove_site.clicked.connect(self._remove_site)
+        site_actions_layout.addWidget(self.btn_remove_site)
+
+        site_actions_layout.addStretch()
+        left_lay.addWidget(site_actions)
+
+        self.btn_new_session = QPushButton("Connect")
+        self.btn_new_session.setProperty("variant", "primary")
         self.btn_new_session.clicked.connect(self._create_session_from_selection)
         left_lay.addWidget(self.btn_new_session)
 
-        self.btn_remove_session = QPushButton("Close Session")
+        self.btn_remove_session = QPushButton("Disconnect")
         self.btn_remove_session.setProperty("variant", "danger")
         self.btn_remove_session.clicked.connect(self._remove_current_session)
         left_lay.addWidget(self.btn_remove_session)
@@ -245,28 +270,27 @@ class MainWindow(QMainWindow):
         self.transfer_override_combo.addItem("SFTP", "sftp")
         self.transfer_override_combo.addItem("SCP", "scp")
         left_lay.addWidget(self.transfer_override_combo)
-        left.setMaximumWidth(220)
+        left.setMinimumWidth(170)
+        left.setMaximumWidth(420)
 
         self.local_panel = LocalPanel()
+        self.local_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.local_panel.files_dropped.connect(self._download_paths)
 
         self.remote_area = QFrame()
         self.remote_area.setObjectName("panelCard")
+        self.remote_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         remote_area_layout = QVBoxLayout(self.remote_area)
-        remote_area_layout.setContentsMargins(TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg)
-        remote_area_layout.setSpacing(TOKENS.spacing_sm)
-        remote_title = QLabel("Remote Workspace")
-        remote_title.setObjectName("sectionTitle")
-        remote_area_layout.addWidget(remote_title)
-        self.remote_placeholder = QLabel("No remote sessions open")
-        self.remote_placeholder.setObjectName("mutedLabel")
-        self.remote_placeholder.setAlignment(Qt.AlignCenter)
+        remote_area_layout.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm)
+        remote_area_layout.setSpacing(0)
+        self.remote_empty_state = self._build_remote_empty_state()
         self.remote_splitter = QSplitter(Qt.Horizontal)
         self.remote_splitter.setChildrenCollapsible(False)
         self.remote_splitter.setHandleWidth(10)
         self.remote_splitter.setOpaqueResize(False)
-        remote_area_layout.addWidget(self.remote_placeholder)
-        remote_area_layout.addWidget(self.remote_splitter)
+        self.remote_splitter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        remote_area_layout.addWidget(self.remote_empty_state)
+        remote_area_layout.addWidget(self.remote_splitter, 1)
         self._refresh_remote_area()
 
         panel_splitter = QSplitter(Qt.Horizontal)
@@ -276,8 +300,8 @@ class MainWindow(QMainWindow):
         panel_splitter.addWidget(self.local_panel)
         panel_splitter.addWidget(self.remote_area)
         panel_splitter.setStretchFactor(0, 1)
-        panel_splitter.setStretchFactor(1, 2)
-        panel_splitter.setSizes([480, 1040])
+        panel_splitter.setStretchFactor(1, 1)
+        panel_splitter.setSizes([560, 680])
 
         bottom_splitter = QSplitter(Qt.Horizontal)
         self.task_center = TaskCenterPanel()
@@ -288,23 +312,45 @@ class MainWindow(QMainWindow):
         self.task_center.request_clear_finished.connect(self.clear_finished_tasks)
         bottom_splitter.addWidget(self.task_center)
 
+        log_panel = QFrame()
+        log_panel.setObjectName("panelCard")
+        log_panel.setMaximumWidth(260)
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm)
+        log_layout.setSpacing(2)
+        log_title = QLabel("Log")
+        log_title.setObjectName("sectionTitle")
+        log_layout.addWidget(log_title)
+        log_hint = QLabel("Recent runtime output")
+        log_hint.setObjectName("mutedLabel")
+        log_layout.addWidget(log_hint)
+
         self.log_text = QTextEdit()
         self.log_text.setObjectName("logOutput")
         self.log_text.setReadOnly(True)
         self.log_text.document().setMaximumBlockCount(1500)
-        bottom_splitter.addWidget(self.log_text)
+        log_layout.addWidget(self.log_text, 1)
+        bottom_splitter.addWidget(log_panel)
         bottom_splitter.setStretchFactor(0, 2)
-        bottom_splitter.setStretchFactor(1, 1)
+        bottom_splitter.setStretchFactor(1, 0)
+        bottom_splitter.setSizes([1160, 220])
 
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.addWidget(panel_splitter)
         right_splitter.addWidget(bottom_splitter)
-        right_splitter.setStretchFactor(0, 3)
-        right_splitter.setStretchFactor(1, 1)
+        right_splitter.setStretchFactor(0, 5)
+        right_splitter.setStretchFactor(1, 2)
+        right_splitter.setSizes([760, 220])
 
         main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.setHandleWidth(10)
+        main_splitter.setOpaqueResize(False)
         main_splitter.addWidget(left)
         main_splitter.addWidget(right_splitter)
+        main_splitter.setStretchFactor(0, 1)
+        main_splitter.setStretchFactor(1, 4)
+        main_splitter.setSizes([200, 1280])
         main_splitter.setStretchFactor(1, 1)
         content_layout.addWidget(main_splitter)
 
@@ -316,25 +362,50 @@ class MainWindow(QMainWindow):
         self._task_timer.start(350)
         self._update_site_action_buttons()
 
+    def _show_site_context_menu(self, pos):
+        item = self.site_list.itemAt(pos)
+        if item:
+            self.site_list.setCurrentItem(item)
+        menu = QMenu(self)
+        act_add = menu.addAction("Add Site")
+        act_add.triggered.connect(self._add_site)
+        if self._selected_site():
+            act_edit = menu.addAction("Edit Site")
+            act_edit.triggered.connect(self._edit_site)
+            act_check = menu.addAction("Check Connection")
+            act_check.triggered.connect(self._check_connection)
+            act_remove = menu.addAction("Remove Site")
+            act_remove.triggered.connect(self._remove_site)
+            menu.addSeparator()
+            act_connect = menu.addAction("Connect")
+            act_connect.triggered.connect(self._create_session_from_selection)
+        menu.exec(self.site_list.mapToGlobal(pos))
+
     def _build_top_bar(self) -> QWidget:
         top_bar = QFrame()
         top_bar.setObjectName("topBar")
-        layout = QGridLayout(top_bar)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setHorizontalSpacing(18)
-        layout.setVerticalSpacing(6)
+        top_bar.setMinimumHeight(52)
+        top_bar.setMaximumHeight(60)
+        layout = QHBoxLayout(top_bar)
+        layout.setContentsMargins(16, 6, 16, 6)
+        layout.setSpacing(10)
 
-        eyebrow = QLabel("Desktop Workspace")
-        eyebrow.setObjectName("eyebrowLabel")
         title = QLabel("SSHFerry")
         title.setObjectName("titleLabel")
-        subtitle = QLabel("Safe SSH transfer console with multi-session control")
-        subtitle.setObjectName("subtitleLabel")
+        title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        text_box = QWidget()
+        text_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        text_layout = QVBoxLayout(text_box)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(0)
+        text_layout.addWidget(title, 0, Qt.AlignLeft | Qt.AlignVCenter)
 
         status_box = QWidget()
+        status_box.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         status_layout = QHBoxLayout(status_box)
         status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(16)
+        status_layout.setSpacing(10)
         self.topbar_sites_label = QLabel("Sites: 0")
         self.topbar_sites_label.setObjectName("summaryLabel")
         self.topbar_sessions_label = QLabel("Sessions: 0")
@@ -345,13 +416,44 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.topbar_sessions_label)
         status_layout.addWidget(self.topbar_tasks_label)
 
-        layout.addWidget(eyebrow, 0, 0)
-        layout.addWidget(title, 1, 0)
-        layout.addWidget(subtitle, 2, 0)
-        layout.addWidget(status_box, 1, 1, 2, 1, Qt.AlignRight | Qt.AlignVCenter)
-        layout.setColumnStretch(0, 1)
+        layout.addWidget(text_box, 1)
+        layout.addWidget(status_box, 0, Qt.AlignRight | Qt.AlignVCenter)
 
         return top_bar
+
+    def _build_remote_empty_state(self) -> QWidget:
+        empty = QFrame()
+        empty.setObjectName("toolbarCard")
+        empty.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout = QVBoxLayout(empty)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(2)
+
+        art = QLabel("SSH")
+        art.setObjectName("titleLabel")
+        art.setAlignment(Qt.AlignCenter)
+        art.setStyleSheet(f"color: {TOKENS.accent};")
+
+        title = QLabel("No remote sessions open")
+        title.setObjectName("sectionTitle")
+        title.setAlignment(Qt.AlignCenter)
+
+        body = QLabel("Select a site on the left, then connect to open a remote workspace.")
+        body.setObjectName("mutedLabel")
+        body.setAlignment(Qt.AlignCenter)
+        body.setWordWrap(True)
+
+        button = QPushButton("Quick Connect")
+        button.setProperty("variant", "primary")
+        button.clicked.connect(self._create_session_from_selection)
+
+        layout.addStretch(1)
+        layout.addWidget(art)
+        layout.addWidget(title)
+        layout.addWidget(body)
+        layout.addWidget(button, 0, Qt.AlignCenter)
+        layout.addStretch(1)
+        return empty
 
     def _create_menu_bar(self):
         menu_bar = self.menuBar()
@@ -470,9 +572,10 @@ class MainWindow(QMainWindow):
         container = QFrame()
         container.setObjectName("sessionCard")
         container.setProperty("active", False)
+        container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(TOKENS.spacing_md, TOKENS.spacing_md, TOKENS.spacing_md, TOKENS.spacing_md)
-        layout.setSpacing(TOKENS.spacing_sm)
+        layout.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm)
+        layout.setSpacing(TOKENS.spacing_xs)
 
         header = QHBoxLayout()
         header.setSpacing(TOKENS.spacing_sm)
@@ -501,7 +604,8 @@ class MainWindow(QMainWindow):
 
         panel = RemotePanel()
         panel.set_session_context(session_id, site.name)
-        layout.addWidget(panel)
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(panel, 1)
 
         session = RemoteSession(session_id, site, panel, container, status_label, selector)
         selector.currentIndexChanged.connect(lambda _idx, sid=session_id: self._switch_session_site(sid))
@@ -910,7 +1014,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_remote_area(self):
         has_sessions = bool(self.sessions)
-        self.remote_placeholder.setVisible(not has_sessions)
+        self.remote_empty_state.setVisible(not has_sessions)
         self.remote_splitter.setVisible(has_sessions)
 
     def _rebalance_remote_splitter(self):

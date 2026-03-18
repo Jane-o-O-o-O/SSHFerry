@@ -2,7 +2,7 @@
 import json
 import os
 
-from PySide6.QtCore import QByteArray, QMimeData, Qt, Signal
+from PySide6.QtCore import QByteArray, QMimeData, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.shared.models import RemoteEntry
-from src.ui.theme import TOKENS, alpha_hex
+from src.ui.theme import TOKENS, alpha_hex, mono_font
 
 
 class DraggableTreeWidget(QTreeWidget):
@@ -123,25 +123,26 @@ class RemotePanel(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(TOKENS.spacing_sm)
+        layout.setSpacing(TOKENS.spacing_xs)
 
         # Navigation bar
         nav_frame = QFrame()
         nav_frame.setObjectName("toolbarCard")
         nav = QHBoxLayout(nav_frame)
-        nav.setContentsMargins(TOKENS.spacing_md, TOKENS.spacing_sm, TOKENS.spacing_md, TOKENS.spacing_sm)
-        nav.setSpacing(TOKENS.spacing_sm)
+        nav.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_xs, TOKENS.spacing_sm, TOKENS.spacing_xs)
+        nav.setSpacing(TOKENS.spacing_xs)
 
         self.btn_up = QPushButton("..")
         self.btn_up.setProperty("variant", "ghost")
-        self.btn_up.setFixedWidth(30)
+        self.btn_up.setFixedSize(34, 34)
         self.btn_up.setToolTip("Go to parent directory")
         self.btn_up.clicked.connect(lambda: self.request_go_up.emit())
         nav.addWidget(self.btn_up)
 
         self.btn_refresh = QPushButton("Refresh")
         self.btn_refresh.setProperty("variant", "ghost")
-        self.btn_refresh.setFixedWidth(60)
+        self.btn_refresh.setMinimumWidth(78)
+        self.btn_refresh.setFixedHeight(34)
         self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         nav.addWidget(self.btn_refresh)
 
@@ -158,6 +159,8 @@ class RemotePanel(QWidget):
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.setUniformRowHeights(True)
         self.tree.setAnimated(True)
+        self.tree.setIconSize(QSize(18, 18))
+        self.tree.header().setStretchLastSection(True)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemExpanded.connect(self._on_item_expanded)
@@ -225,6 +228,8 @@ class RemotePanel(QWidget):
             child.setText(1, "DIR" if entry.is_dir else "FILE")
             child.setText(2, self._format_size(entry.size) if not entry.is_dir else "")
             child.setText(3, entry.mtime_datetime.strftime("%Y-%m-%d %H:%M:%S"))
+            child.setFont(2, mono_font(9))
+            child.setFont(3, mono_font(9))
             
             # Store data
             child.setData(0, Qt.UserRole, entry)

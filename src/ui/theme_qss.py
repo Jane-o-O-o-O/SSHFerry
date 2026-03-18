@@ -54,22 +54,15 @@ QFrame#toolbarCard, QWidget#toolbarCard {{
     border-radius: {TOKENS.radius_md}px;
 }}
 
-QLabel#eyebrowLabel {{
-    color: {TOKENS.text_soft};
-    border: 1px solid {TOKENS.line_strong};
-    border-radius: 999px;
-    padding: 4px 10px;
-    background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.7)};
-}}
-
 QLabel#titleLabel {{
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 700;
     color: {TOKENS.text_main};
 }}
 
 QLabel#subtitleLabel, QLabel#mutedLabel {{
     color: {TOKENS.text_soft};
+    font-size: 12px;
 }}
 
 QLabel#sectionTitle {{
@@ -86,7 +79,8 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {{
     background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.96)};
     border: 1px solid {TOKENS.line_soft};
     border-radius: {TOKENS.radius_sm}px;
-    padding: 8px 10px;
+    padding: 8px 12px;
+    min-height: 18px;
     color: {TOKENS.text_main};
 }}
 
@@ -97,8 +91,9 @@ QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBo
 QPushButton {{
     background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.9)};
     border: 1px solid {TOKENS.line_soft};
-    border-radius: 999px;
+    border-radius: {TOKENS.radius_sm}px;
     padding: 8px 14px;
+    min-height: 18px;
     color: {TOKENS.text_main};
 }}
 
@@ -127,6 +122,26 @@ QPushButton[variant="ghost"] {{
     background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.55)};
 }}
 
+QPushButton[chrome="icon"] {{
+    padding: 0;
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 34px;
+    max-height: 34px;
+    border-radius: {TOKENS.radius_sm}px;
+    border: none;
+    background-color: transparent;
+}}
+
+QPushButton[chrome="icon"]:hover {{
+    background-color: {TOKENS.bg_panel_alt};
+    border: 1px solid {TOKENS.line_soft};
+}}
+
+QPushButton[chrome="icon"]:pressed {{
+    background-color: {TOKENS.accent_soft};
+}}
+
 QListWidget, QTreeView, QTreeWidget, QTableWidget, QTextEdit#logOutput {{
     background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.96)};
     alternate-background-color: {TOKENS.bg_panel_alt};
@@ -153,7 +168,7 @@ QHeaderView::section {{
     border: none;
     border-right: 1px solid {TOKENS.line_soft};
     border-bottom: 1px solid {TOKENS.line_soft};
-    padding: 8px 10px;
+    padding: 6px 8px;
     font-weight: 700;
     color: {TOKENS.text_soft};
 }}

@@ -16,12 +16,21 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QStyledItemDelegate,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
-from src.ui.theme import TOKENS, alpha_hex
+from src.ui.theme import TOKENS, alpha_hex, mono_font
+
+
+class MetricsColumnDelegate(QStyledItemDelegate):
+    """Use tabular-looking mono font for aligned metrics columns."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.font = mono_font(9)
 
 
 def get_available_drives() -> list[str]:
@@ -122,23 +131,20 @@ class LocalPanel(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg, TOKENS.spacing_lg)
-        layout.setSpacing(TOKENS.spacing_sm)
+        layout.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm, TOKENS.spacing_sm)
+        layout.setSpacing(TOKENS.spacing_xs)
 
         # Header
         header_frame = QFrame()
         header_frame.setObjectName("toolbarCard")
         header = QHBoxLayout(header_frame)
-        header.setContentsMargins(TOKENS.spacing_md, TOKENS.spacing_sm, TOKENS.spacing_md, TOKENS.spacing_sm)
+        header.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_xs, TOKENS.spacing_sm, TOKENS.spacing_xs)
         title_box = QVBoxLayout()
         title_box.setContentsMargins(0, 0, 0, 0)
-        title_box.setSpacing(2)
+        title_box.setSpacing(0)
         title = QLabel("Local Workspace")
         title.setObjectName("sectionTitle")
-        subtitle = QLabel("Browse local files and receive remote downloads")
-        subtitle.setObjectName("mutedLabel")
         title_box.addWidget(title)
-        title_box.addWidget(subtitle)
         header.addLayout(title_box)
         header.addStretch()
         layout.addWidget(header_frame)
@@ -147,12 +153,13 @@ class LocalPanel(QWidget):
         nav_frame = QFrame()
         nav_frame.setObjectName("toolbarCard")
         nav = QHBoxLayout(nav_frame)
-        nav.setContentsMargins(TOKENS.spacing_md, TOKENS.spacing_sm, TOKENS.spacing_md, TOKENS.spacing_sm)
-        nav.setSpacing(TOKENS.spacing_sm)
+        nav.setContentsMargins(TOKENS.spacing_sm, TOKENS.spacing_xs, TOKENS.spacing_sm, TOKENS.spacing_xs)
+        nav.setSpacing(TOKENS.spacing_xs)
         
         # Drive selector (Windows)
         self.drive_combo = QComboBox()
         self.drive_combo.setFixedWidth(60)
+        self.drive_combo.setFixedHeight(34)
         self.drive_combo.setToolTip("Select drive")
         self._populate_drives()
         self.drive_combo.currentTextChanged.connect(self._on_drive_changed)
@@ -160,19 +167,21 @@ class LocalPanel(QWidget):
         
         self.btn_up = QPushButton("..")
         self.btn_up.setProperty("variant", "ghost")
-        self.btn_up.setFixedWidth(30)
+        self.btn_up.setFixedSize(34, 34)
         self.btn_up.setToolTip("Go to parent directory")
         self.btn_up.clicked.connect(self._go_up)
         nav.addWidget(self.btn_up)
 
         self.btn_refresh = QPushButton("Refresh")
         self.btn_refresh.setProperty("variant", "ghost")
-        self.btn_refresh.setFixedWidth(70)
+        self.btn_refresh.setMinimumWidth(78)
+        self.btn_refresh.setFixedHeight(34)
         self.btn_refresh.setToolTip("Refresh")
         self.btn_refresh.clicked.connect(self._refresh)
         nav.addWidget(self.btn_refresh)
 
         self.path_edit = QLineEdit(self.current_dir)
+        self.path_edit.setFixedHeight(34)
         self.path_edit.returnPressed.connect(self._on_path_entered)
         nav.addWidget(self.path_edit)
 
@@ -196,8 +205,11 @@ class LocalPanel(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setAnimated(True)
         self.tree.setSortingEnabled(True)
+        self.tree.header().setStretchLastSection(True)
         self.tree.sortByColumn(0, Qt.AscendingOrder)
         self.tree.doubleClicked.connect(self._on_double_clicked)
+        self.tree.setItemDelegateForColumn(1, MetricsColumnDelegate(self.tree))
+        self.tree.setItemDelegateForColumn(3, MetricsColumnDelegate(self.tree))
 
         # Hide unnecessary columns (keep Name, Size, Date Modified)
         self.tree.setColumnHidden(2, True)  # Type column
