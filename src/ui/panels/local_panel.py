@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFileIconProvider,
     QFileSystemModel,
     QFrame,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -31,6 +32,43 @@ class MetricsColumnDelegate(QStyledItemDelegate):
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
         option.font = mono_font(9)
+
+
+class SizeColumnDelegate(MetricsColumnDelegate):
+    """Render local file sizes with stable English units."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = Qt.AlignRight | Qt.AlignVCenter
+        model = index.model()
+        if model is None:
+            return
+        try:
+            file_info = model.fileInfo(index)
+        except Exception:
+            return
+        if file_info.isDir():
+            option.text = ""
+            return
+        option.text = self._format_size(file_info.size())
+
+    @staticmethod
+    def _format_size(size: int) -> str:
+        for unit in ["B", "KB", "MB", "GB", "TB", "PB"]:
+            if size < 1024.0:
+                if unit == "B":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} EB"
+
+
+class DateColumnDelegate(MetricsColumnDelegate):
+    """Keep date values left-aligned like Windows Explorer."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = Qt.AlignLeft | Qt.AlignVCenter
 
 
 def get_available_drives() -> list[str]:
@@ -205,14 +243,23 @@ class LocalPanel(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setAnimated(True)
         self.tree.setSortingEnabled(True)
-        self.tree.header().setStretchLastSection(True)
+        header = self.tree.header()
+        header.setStretchLastSection(True)
+        header.setMinimumSectionSize(96)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
+        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.tree.sortByColumn(0, Qt.AscendingOrder)
         self.tree.doubleClicked.connect(self._on_double_clicked)
-        self.tree.setItemDelegateForColumn(1, MetricsColumnDelegate(self.tree))
-        self.tree.setItemDelegateForColumn(3, MetricsColumnDelegate(self.tree))
+        self.tree.setItemDelegateForColumn(1, SizeColumnDelegate(self.tree))
+        self.tree.setItemDelegateForColumn(3, DateColumnDelegate(self.tree))
 
         # Hide unnecessary columns (keep Name, Size, Date Modified)
         self.tree.setColumnHidden(2, True)  # Type column
+        self.tree.setColumnWidth(0, 280)
+        self.tree.setColumnWidth(1, 110)
+        self.tree.setColumnWidth(3, 150)
         self.tree.setAlternatingRowColors(True)
         self._base_tree_style = (
             "QTreeView { padding: 4px; }"

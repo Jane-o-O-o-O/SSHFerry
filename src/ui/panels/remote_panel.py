@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
+    QHeaderView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -18,10 +19,35 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QStyle,
+    QStyledItemDelegate,
 )
 
 from src.shared.models import RemoteEntry
 from src.ui.theme import TOKENS, alpha_hex, mono_font
+
+
+class MetricsColumnDelegate(QStyledItemDelegate):
+    """Use mono font for aligned metric columns."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.font = mono_font(9)
+
+
+class SizeColumnDelegate(MetricsColumnDelegate):
+    """Right-align file sizes like Windows Explorer."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = Qt.AlignRight | Qt.AlignVCenter
+
+
+class DateColumnDelegate(MetricsColumnDelegate):
+    """Keep modified dates left-aligned like Windows Explorer."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = Qt.AlignLeft | Qt.AlignVCenter
 
 
 class DraggableTreeWidget(QTreeWidget):
@@ -160,17 +186,27 @@ class RemotePanel(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setAnimated(True)
         self.tree.setIconSize(QSize(18, 18))
-        self.tree.header().setStretchLastSection(True)
+        header = self.tree.header()
+        header.setStretchLastSection(True)
+        header.setMinimumSectionSize(96)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
+        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemExpanded.connect(self._on_item_expanded)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.itemCollapsed.connect(self._on_item_collapsed)
+        self.tree.setItemDelegateForColumn(2, SizeColumnDelegate(self.tree))
+        self.tree.setItemDelegateForColumn(3, DateColumnDelegate(self.tree))
         
         # Adjust column widths
         self.tree.setColumnWidth(0, 300)
         self.tree.setColumnWidth(1, 60)
-        self.tree.setColumnWidth(2, 80)
+        self.tree.setColumnWidth(2, 110)
+        self.tree.setColumnWidth(3, 150)
 
         self.tree.setAlternatingRowColors(True)
         self._base_tree_stylesheet = (
@@ -230,6 +266,8 @@ class RemotePanel(QWidget):
             child.setText(3, entry.mtime_datetime.strftime("%Y-%m-%d %H:%M:%S"))
             child.setFont(2, mono_font(9))
             child.setFont(3, mono_font(9))
+            child.setTextAlignment(2, Qt.AlignRight | Qt.AlignVCenter)
+            child.setTextAlignment(3, Qt.AlignLeft | Qt.AlignVCenter)
             
             # Store data
             child.setData(0, Qt.UserRole, entry)

@@ -166,11 +166,15 @@ QListWidget::item:hover, QTreeView::item:hover, QTreeWidget::item:hover, QTableW
 QHeaderView::section {{
     background-color: {TOKENS.bg_panel_alt};
     border: none;
-    border-right: 1px solid {TOKENS.line_soft};
+    border-right: 1px solid {TOKENS.line_strong};
     border-bottom: 1px solid {TOKENS.line_soft};
     padding: 6px 8px;
     font-weight: 700;
     color: {TOKENS.text_soft};
+}}
+
+QHeaderView::section:last {{
+    border-right: none;
 }}
 
 QScrollBar:vertical {{
