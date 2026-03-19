@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/sshferry-logo.png" alt="SSHFerry logo" width="220" />
+  <img src="docs/assets/sshferry_logo.png" alt="SSHFerry logo" width="" />
 </p>
 
 # SSHFerry
