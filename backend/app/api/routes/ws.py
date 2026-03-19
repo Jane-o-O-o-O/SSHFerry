@@ -90,6 +90,8 @@ async def task_updates(websocket: WebSocket) -> None:
             await asyncio.sleep(TASK_SNAPSHOT_INTERVAL_SECONDS)
     except WebSocketDisconnect:
         return
+    except asyncio.CancelledError:
+        return
 
 
 @router.websocket('/activity')
@@ -117,6 +119,8 @@ async def activity_updates(websocket: WebSocket) -> None:
             await asyncio.sleep(ACTIVITY_SNAPSHOT_INTERVAL_SECONDS)
     except WebSocketDisconnect:
         return
+    except asyncio.CancelledError:
+        return
 
 
 @router.websocket('/logs')
@@ -143,4 +147,6 @@ async def log_updates(websocket: WebSocket) -> None:
 
             await asyncio.sleep(LOG_SNAPSHOT_INTERVAL_SECONDS)
     except WebSocketDisconnect:
+        return
+    except asyncio.CancelledError:
         return

@@ -13,7 +13,7 @@ const MAX_RECONNECT_BEFORE_POLLING = 3;
 
 export function useTaskSocket() {
   const authReady = useAuthStore((state) => state.status === 'authenticated');
-  const setSnapshot = useTasksStore((state) => state.setSnapshot);
+  const setRemoteSnapshot = useTasksStore((state) => state.setRemoteSnapshot);
   const setSocketStatus = useTasksStore((state) => state.setSocketStatus);
   const setSocketError = useTasksStore((state) => state.setSocketError);
   const pushToast = useUiStore((state) => state.pushToast);
@@ -32,7 +32,7 @@ export function useTaskSocket() {
     const pollTasks = async () => {
       try {
         const snapshot = await listTasks();
-        setSnapshot(snapshot.items, snapshot.total);
+        setRemoteSnapshot(snapshot.items, snapshot.total);
       } catch (error) {
         setSocketError(error instanceof Error ? error.message : translate('socket.pollFailed'));
       }
@@ -77,7 +77,7 @@ export function useTaskSocket() {
         }
 
         if (payload.type === 'task_snapshot') {
-          setSnapshot(payload.items, payload.total);
+          setRemoteSnapshot(payload.items, payload.total);
           return;
         }
 
@@ -118,5 +118,5 @@ export function useTaskSocket() {
       }
       setSocketStatus('idle');
     };
-  }, [authReady, pushToast, setSnapshot, setSocketError, setSocketStatus]);
+  }, [authReady, pushToast, setRemoteSnapshot, setSocketError, setSocketStatus]);
 }

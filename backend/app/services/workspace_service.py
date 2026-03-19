@@ -146,15 +146,36 @@ class WorkspaceService:
 
         return WorkspaceDeleteResponse(deleted_paths=deleted_paths, total=len(deleted_paths))
 
+    def clear_user_root(self, user_id: str) -> tuple[int, int, int]:
+        user_root = self._user_root_path(user_id)
+        file_count = 0
+        dir_count = 0
+        total_size = 0
+
+        if user_root.exists():
+            if user_root.is_dir():
+                file_count, dir_count, total_size = self._scan_stats(user_root)
+                shutil.rmtree(user_root)
+            else:
+                file_count = 1
+                total_size = int(user_root.stat().st_size)
+                user_root.unlink()
+
+        user_root.mkdir(parents=True, exist_ok=True)
+        return file_count, dir_count, total_size
+
     def resolve_workspace_path(self, user_id: str, raw_path: str, *, require_exists: bool) -> Path:
         user_root = self._ensure_user_root(user_id)
         _, actual_path = self._resolve_virtual_path(user_root, raw_path, require_exists=require_exists, require_dir=False)
         return actual_path
 
     def _ensure_user_root(self, user_id: str) -> Path:
-        root = self.workspace_root / self._sanitize_user_id(user_id)
+        root = self._user_root_path(user_id)
         root.mkdir(parents=True, exist_ok=True)
-        return root.resolve(strict=False)
+        return root
+
+    def _user_root_path(self, user_id: str) -> Path:
+        return (self.workspace_root / self._sanitize_user_id(user_id)).resolve(strict=False)
 
     @staticmethod
     def _sanitize_user_id(user_id: str) -> str:

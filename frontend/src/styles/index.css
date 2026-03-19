@@ -480,7 +480,7 @@ a {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   flex: 0 0 auto;
 }
 
@@ -957,6 +957,33 @@ a {
 .task-current-cell details {
   margin-top: 8px;
   color: var(--danger);
+}
+
+.task-progress-cell {
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.task-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(53, 63, 68, 0.12);
+  overflow: hidden;
+}
+
+.task-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f6e7d, #5d8a63);
+  transition: width 0.18s ease;
+}
+
+.task-progress-copy {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-soft);
 }
 
 .compact-actions {

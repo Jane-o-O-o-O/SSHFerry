@@ -1,6 +1,9 @@
+import type { AxiosProgressEvent } from 'axios';
+
 import type {
   WorkspaceDeleteResponse,
   WorkspaceListResponse,
+  WorkspaceResetResponse,
   WorkspaceStatResponse,
   WorkspaceUploadResponse,
 } from './types';
@@ -24,6 +27,8 @@ export async function uploadWorkspaceFiles(payload: {
   targetPath?: string;
   files: File[];
   relativePaths?: string[];
+  signal?: AbortSignal;
+  onUploadProgress?: (event: AxiosProgressEvent) => void;
 }): Promise<WorkspaceUploadResponse> {
   const formData = new FormData();
   payload.files.forEach((file) => {
@@ -35,7 +40,11 @@ export async function uploadWorkspaceFiles(payload: {
   payload.relativePaths?.forEach((relativePath) => {
     formData.append('relative_paths', relativePath);
   });
-  const { data } = await http.post<WorkspaceUploadResponse>('/api/workspace/uploads', formData);
+  const { data } = await http.post<WorkspaceUploadResponse>('/api/workspace/uploads', formData, {
+    signal: payload.signal,
+    onUploadProgress: payload.onUploadProgress,
+    timeout: 0,
+  });
   return data;
 }
 
@@ -43,5 +52,10 @@ export async function deleteWorkspaceItems(paths: string[]): Promise<WorkspaceDe
   const { data } = await http.delete<WorkspaceDeleteResponse>('/api/workspace/items', {
     data: { paths },
   });
+  return data;
+}
+
+export async function resetWorkspaceData(): Promise<WorkspaceResetResponse> {
+  const { data } = await http.post<WorkspaceResetResponse>('/api/workspace/reset');
   return data;
 }

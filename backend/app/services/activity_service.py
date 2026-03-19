@@ -75,6 +75,16 @@ class ActivityService:
                 items = items[-limit:]
             return ActivitySnapshot(items=items, total=len(items), sequence=self._sequence)
 
+    def clear_user(self, user_id: str | None) -> int:
+        """Remove activity entries owned by one user and return the count."""
+        with self._lock:
+            kept_items = [item for item in self._entries if item.user_id != user_id]
+            removed = len(self._entries) - len(kept_items)
+            if removed:
+                self._entries = deque(kept_items, maxlen=self._entries.maxlen)
+                self._sequence += 1
+            return removed
+
     def close(self) -> None:
         """Release any held resources."""
         return None

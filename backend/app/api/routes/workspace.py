@@ -8,11 +8,13 @@ from backend.app.schemas.workspace import (
     WorkspaceDeleteRequest,
     WorkspaceDeleteResponse,
     WorkspaceListResponse,
+    WorkspaceResetResponse,
     WorkspaceStatResponse,
     WorkspaceUploadResponse,
 )
 from backend.app.services.app_state import AppState
 from backend.app.services.auth_service import AuthContext
+from backend.app.services.user_cleanup_service import UserCleanupService
 from backend.app.services.workspace_service import WorkspaceService
 
 
@@ -80,5 +82,23 @@ def delete_workspace_items(
         action='delete',
         title='Workspace items deleted',
         message=f'{response.total} item(s) removed from the workspace.',
+    )
+    return response
+
+
+@router.post('/reset', response_model=WorkspaceResetResponse)
+def reset_workspace_data(
+    context: AuthContext = Depends(require_current_user),
+    app_state: AppState = Depends(get_app_state),
+) -> WorkspaceResetResponse:
+    service = UserCleanupService(app_state)
+    response = service.reset_user_data(context.user.user_id)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='warning',
+        category='workspace',
+        action='reset',
+        title='User data cleared',
+        message='Saved sites, sessions, tasks, activity entries, and workspace files were removed.',
     )
     return response

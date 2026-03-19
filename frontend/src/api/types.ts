@@ -26,6 +26,7 @@ export interface HealthResponse {
   access_cookie_name: string;
   refresh_cookie_name: string;
   workspace_root: string;
+  features?: string[];
 }
 
 export interface AuthSessionResponse {
@@ -175,6 +176,17 @@ export interface WorkspaceUploadResponse {
 export interface WorkspaceDeleteResponse {
   deleted_paths: string[];
   total: number;
+}
+
+export interface WorkspaceResetResponse {
+  deleted_site_count: number;
+  closed_session_count: number;
+  canceled_task_count: number;
+  cleared_task_count: number;
+  cleared_activity_count: number;
+  workspace_file_count: number;
+  workspace_dir_count: number;
+  workspace_total_size: number;
 }
 
 export interface RemoteEntry {

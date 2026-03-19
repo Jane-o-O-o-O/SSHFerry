@@ -18,6 +18,8 @@ def test_health_endpoint_reports_backend_status():
     assert payload['auth_mode'] in {'local-dev-cookie', 'cookie-session'}
     assert payload['access_cookie_name']
     assert payload['refresh_cookie_name']
+    assert payload['features']
+    assert 'workspace-reset' in payload['features']
     if payload['runtime_mode'] == 'local-dev':
         assert payload['auth_header_name'] == 'X-SSHFerry-Token'
     if payload['ready']:

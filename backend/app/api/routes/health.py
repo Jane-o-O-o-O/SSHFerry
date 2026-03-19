@@ -30,4 +30,9 @@ def get_health(app_state: AppState = Depends(get_app_state)) -> dict[str, object
         'access_cookie_name': settings.access_cookie_name,
         'refresh_cookie_name': settings.refresh_cookie_name,
         'workspace_root': str(settings.workspace_root),
+        'features': [
+            'activity-feed',
+            'debug-logs',
+            'workspace-reset',
+        ],
     }

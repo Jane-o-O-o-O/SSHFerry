@@ -46,6 +46,19 @@ class WorkspaceDeleteResponse(BaseModel):
     total: int
 
 
+class WorkspaceResetResponse(BaseModel):
+    """Summary for clearing one authenticated user's persisted data."""
+
+    deleted_site_count: int
+    closed_session_count: int
+    canceled_task_count: int
+    cleared_task_count: int
+    cleared_activity_count: int
+    workspace_file_count: int
+    workspace_dir_count: int
+    workspace_total_size: int
+
+
 class WorkspaceUploadResponse(BaseModel):
     """Upload summary."""
 
