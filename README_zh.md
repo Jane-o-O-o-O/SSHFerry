@@ -2,258 +2,246 @@
 
 中文 | [English](README.md)
 
-SSHFerry 是一个基于 Python + PySide6 的 SSH/SFTP/SCP 桌面图形工具。
-项目当前聚焦三件事：**远程操作安全**、**传输行为实用**、**任务状态清晰可见**。
+SSHFerry 是一个面向多会话 SSH 文件传输场景的工作区，重点关注远端操作安全、任务过程可见，以及贴近日常使用的传输体验。
 
-## 亮点能力
+## 概览
 
-- 基于 `remote_root` 的远程沙箱保护
-- 支持文件与文件夹上传/下载，支持递归
-- 支持续传与跳过策略
-- 内置连接检查：TCP / SSH / SFTP / 读写
-- 任务中心支持暂停 / 恢复 / 取消 / 重试
-- 大文件支持高吞吐并行分块传输
-- 单窗口支持多个远端会话
-- 支持在两个远端面板之间拖拽，创建远端到远端传输任务
+- 🖥️ 桌面客户端：基于 Python + PySide6，目前仍是主要可运行应用
+- 🧩 后端服务：基于 FastAPI，对外提供本地传输 API
+- 🌐 前端应用：基于 React + Vite，正在持续接入中
 
-## 当前范围
+## 亮点
 
-- 运行环境：Python `3.11+`
-- GUI：`PySide6`
-- 协议 / 依赖库：`Paramiko`（SSH/SFTP）+ `scp`
-- 传输引擎：
-  - `sftp`（默认）
-  - `parallel`（大文件并行分块传输）
-  - `scp`（手动选择的传输模式，默认覆盖）
-- 任务状态：
-  - `pending`、`running`、`paused`、`done`、`failed`、`canceled`、`skipped`
+- 🔒 基于 `remote_root` 的远端操作沙箱保护
+- 📁 同时支持文件与文件夹的上传下载
+- 🔁 支持断点续传与跳过逻辑的传输行为
+- 🧪 内置 TCP / SSH / SFTP / 写入权限连接检查
+- 📊 任务中心支持暂停、继续、取消、重试
+- ⚡ 大文件自动启用并行分块传输
+- 🪟 单窗口内支持多个远端 session
+- 🔀 支持远端到远端拖拽复制
+
+## 架构
+
+### 🖥️ 桌面客户端
+
+- 运行时：Python `3.11+`
+- UI：`PySide6`
+- 启动入口：`python -m src.app.main`
+
+### 🧩 后端
+
+- 运行时：Python `3.11+`
+- 框架：`FastAPI` + `uvicorn`
+- 启动入口：`python -m backend.app.main`
+
+### 🌐 前端
+
+- 运行时：Node.js
+- 技术栈：`React` + `TypeScript` + `Vite`
+- 开发服务器：在 `frontend/` 下执行 `npm run dev`
+
+### 🚚 传输引擎
+
+- `sftp`：默认传输引擎
+- `parallel`：面向大文件的分块并行传输
+- `scp`：手动协议覆盖时可选，偏向覆盖式行为
+
+### 📌 任务状态
+
+- `pending`
+- `running`
+- `paused`
+- `done`
+- `failed`
+- `canceled`
+- `skipped`
+
+## 仓库结构
+
+```text
+src/        桌面应用、传输引擎、调度器、共享模型
+backend/    FastAPI 后端服务
+frontend/   React 前端
+docs/       架构与迁移文档
+tests/      Pytest 测试
+tools/      构建与性能脚本
+```
+
+## 文档
+
+- 📘 总览文档：[docs/README.md](docs/README.md)
+- 🧱 前端构建说明：[docs/frontend/FRONTEND_BUILD.md](docs/frontend/FRONTEND_BUILD.md)
+- 🔌 前端 API 说明：[docs/frontend/FRONTEND_API.md](docs/frontend/FRONTEND_API.md)
+- 🛠️ 后端待办清单：[docs/backend/BACKEND_TODO.md](docs/backend/BACKEND_TODO.md)
+- 🗂️ 历史架构记录：[docs/architecture/agent.md](docs/architecture/agent.md)
 
 ## 快速开始
 
-1. 添加站点，可以手动填写表单，也可以直接粘贴 SSH 命令。
-2. 尽量把 `remote_root` 设置为独立项目目录。若留空，默认是 `/`。
-3. 执行连接检查。
-4. 打开一个或多个远端会话并连接。
-5. 上传或下载文件 / 文件夹。
-   - 站点级默认传输协议可设置为 `sftp` 或 `scp`
-   - 主窗口可按任务覆盖协议：`Auto / SFTP / SCP`
-6. 可直接在两个远端面板之间拖拽，创建远端到远端传输任务。
-   - 文件任务会直接入队
-   - 文件夹任务会先扫描，以便统计总文件数和总字节数
-7. 在任务中心查看和控制任务。
-
-### 首次启动说明
-
-- SSHFerry 启动后不再自动创建演示站点
-- 如果站点列表为空，点击 `Add Site` 创建第一个连接
-
-## 安装
+### 1. 安装 Python 依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 启动
+### 2. 运行桌面客户端
 
-### Windows
+Windows：
 
 ```powershell
 ./run.bat
-# 或
+```
+
+跨平台：
+
+```bash
 python -m src.app.main
 ```
 
-### Linux / macOS
+### 3. 运行后端
 
 ```bash
-chmod +x run.sh
-./run.sh
-# 或
-python3 -m src.app.main
+python -m backend.app.main
 ```
 
-## Windows 打包发布
+可选环境变量：
 
-使用 PyInstaller 生成可分发 GUI 应用：
+- `SSHFERRY_BACKEND_HOST`
+- `SSHFERRY_BACKEND_PORT`
+- `SSHFERRY_ALLOWED_ORIGINS`
+- `SSHFERRY_LOCAL_TOKEN`
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build_windows.ps1 -VenvPath .venv_compat
+### 4. 运行前端
+
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-推荐的验证流程：
+构建：
 
-```powershell
-# 1) 先构建带控制台的调试包
-powershell -ExecutionPolicy Bypass -File .\tools\build_windows.ps1 -Clean -Debug -VenvPath .venv_compat
-
-# 2) 启动与连接检查正常后，再构建 GUI 正式包
-powershell -ExecutionPolicy Bypass -File .\tools\build_windows.ps1 -Clean -VenvPath .venv_compat
+```bash
+cd frontend
+npm install
+npm run build
 ```
 
-也可以使用包装脚本：
+## 桌面端工作流
 
-```bat
-tools\build_windows.bat
-```
+1. ➕ 手动添加站点，或从 SSH 命令快速导入。
+2. 🧭 尽量将 `remote_root` 设为专用目录。
+3. 🧪 先执行连接检查。
+4. 🪟 打开一个或多个远端 session。
+5. ⬆️⬇️ 上传或下载文件、文件夹。
+6. 🔀 在远端面板之间拖拽，创建远端到远端传输。
+7. 📊 在任务中心中查看并控制任务进度。
 
-输出目录：
+说明：
 
-```text
-release/SSHFerry-<version>-windows/
-```
+- 站点默认协议可为 `sftp` 或 `scp`
+- 窗口级协议覆盖可强制使用 `Auto / SFTP / SCP`
+- 若 `remote_root` 为空，会自动回退到 `/`
 
-调试包目录：
+## 验证
 
-```text
-release/SSHFerryDebug-<version>-windows-debug/
-```
-
-脚本还会生成：
-
-```text
-release/SSHFerry-<version>-windows.zip
-release/SSHFerry-<version>-windows.sha256
-```
-
-打包注意事项：
-
-- 发布时请保留整个目录，或直接发布 `.zip`，不要只单独分发 `.exe`
-- Windows 构建采用 `onedir` 布局，以提高 PySide6 运行稳定性
-- 默认禁用 UPX，减少 Qt 运行问题和杀毒软件误报
-
-推荐发布流程：
-
-1. 上传 `.zip`
-2. 同时上传 `.sha256` 校验文件
-
-### GitHub Release 检查清单
-
-发布前建议确认：
-
-1. `pytest -q` 本地通过
-2. `release/SSHFerryDebug-<version>-windows-debug/SSHFerryDebug.exe` 能正常启动
-3. `release/SSHFerry-<version>-windows/SSHFerry.exe` 能正常启动
-4. Windows 下本地文件面板图标显示正常
-5. 需要时会在 `%USERPROFILE%\AppData\Local\SSHFerry\` 下生成 `startup.log`
-
-推荐上传的 Release 附件：
-
-- `SSHFerry-<version>-windows.zip`
-- `SSHFerry-<version>-windows.sha256`
-- 可选：`SSHFerryDebug-<version>-windows-debug.zip`
-
-## 功能验证
-
-### 自动化检查
+运行测试：
 
 ```bash
 pytest -q
 ```
 
-```bash
-python -c "from src.shared.errors import ErrorCode; from src.shared.models import SiteConfig, Task; from src.shared.paths import normalize_remote_path, ensure_in_sandbox; from src.engines.sftp_engine import SftpEngine; from src.core.scheduler import TaskScheduler; from src.services.connection_checker import ConnectionChecker; print('imports_ok')"
-```
-
-### 建议手工验证
-
-1. 使用独立沙箱目录连接测试主机
-2. 同一文件上传两次，确认第二次状态为 `skipped`
-3. 中断大文件传输后重试，确认续传生效
-4. 将远端文件拖到本地面板，确认会创建下载任务
-5. 打开两个远端会话，在它们之间拖拽文件或文件夹，确认会创建远端到远端任务
-6. 尝试操作沙箱外路径，确认被拦截
-
-## 大文件性能
-
-### 当前策略
-
-- 大文件优先走加速传输路径
-- 当文件达到阈值后，会自动切换到并行 SFTP 分块传输
-- 并行传输支持吞吐预设：`low` / `medium` / `high`
-- 默认按方向区分：
-  - 上传使用 `medium`
-  - 下载使用 `high`
-- 调度器默认按协议限制并发：
-  - `max_workers_total=3`
-  - `max_workers_sftp=3`
-  - `max_workers_scp=2`
-  - `max_workers_parallel=1`
-
-### SCP 行为说明
-
-- 文件上传 / 下载任务支持 SCP
-- SCP 默认是覆盖语义，不支持原生续传
-- 如果 SCP 失败，调度器会自动回退一次到 SFTP
-- 回退后仍可继续使用 SFTP 已有的续传 / 跳过逻辑
-
-### 远端到远端传输说明
-
-- 远端到远端任务通过两个远端面板之间拖拽创建
-- 对较小文件，程序会优先尝试在源服务器上直接执行 `scp` 复制到目标服务器
-- 直连复制当前要求目标站点使用密钥认证，并提供 `key_path`
-- 如果直连失败，程序会回退到桥接模式，由 SSHFerry 同时连接两端做中继传输
-- 大文件默认跳过直连，直接走并行桥接
-- 文件夹传输也是同样思路：先尝试递归 `scp`，失败后回退为中继复制
-
-### 为什么现在回退更快
-
-- 每个 worker 复用远端文件句柄，而不是每个分块重复打开关闭
-- 使用多连接并发传输分块
-- 进度回调做了批量化，降低回调开销
-
-### 速度优化建议
-
-1. 先保持默认方向策略：`upload=medium`、`download=high`
-2. 尽量使用稳定的有线网络
-3. 优先使用密钥认证，并尽量减少代理跳转层数
-4. 传输中断后优先续传，不要从零开始
-5. 保证两端磁盘 I/O 有余量，并行分块对存储瓶颈更敏感
-
-### 针对自己服务器做基准测试
+快速导入检查：
 
 ```bash
-python tools/benchmark_transfer.py --site "<你的站点名>" --size-mb 512 --iterations 2
+python -c "from src.shared.models import SiteConfig, Task; from src.core.scheduler import TaskScheduler; from src.services.connection_checker import ConnectionChecker; print('imports_ok')"
 ```
 
-- 可通过 `--modes` 自定义模式，例如：`sftp,parallel:high,parallel:medium`
-- 最终调优建议以基准结果为准，真实速度主要受 RTT、限流和磁盘 I/O 影响
+## 打包
 
-### 观测到的相对收益
+当前 Windows 打包主要面向 PySide6 桌面客户端。
 
-- 在真实远程链路测试中，大文件场景下 `parallel` 相比普通 `sftp` 的吞吐约为 **10x 到 16x**
-- 同一测试模式下：
-  - 下载更偏向 `parallel:high`
-  - 上传更偏向 `parallel:medium`
-- 这些是相对倍数，不是固定速度值，实际效果会随网络与服务器条件变化
+构建：
 
-### 并行调优环境变量
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_windows.ps1 -VenvPath .venv_compat
+```
 
-- `SSHFERRY_PARALLEL_WORKERS`：覆盖 worker 数
-- `SSHFERRY_PARALLEL_CHUNK_BYTES`：覆盖分块大小
-- `SSHFERRY_PARALLEL_WARMUP_BATCH`：每批预热启动的 worker 数
-- `SSHFERRY_PARALLEL_WARMUP_DELAY`：预热批次之间的间隔秒数
-- `SSHFERRY_PARALLEL_MAX_CHUNK_RETRIES`：单分块最大重试次数
-- `SSHFERRY_STRICT_HOSTKEY`：设置为 `1` / `true` / `yes` / `on` 时启用严格 host key 校验
+先做 Debug 构建：
 
-## 项目结构
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_windows.ps1 -Clean -Debug -VenvPath .venv_compat
+```
+
+Release 构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_windows.ps1 -Clean -VenvPath .venv_compat
+```
+
+包装脚本：
+
+```bat
+tools\build_windows.bat
+```
+
+输出：
 
 ```text
-src/
-  app/        # 入口
-  core/       # 调度器与任务逻辑
-  engines/    # SFTP / SCP / 并行 SFTP / 远端到远端传输
-  services/   # 站点存储、连接检查、指标统计
-  shared/     # 模型、错误、路径沙箱、日志
-  ui/         # 主窗口与面板
-
-tests/        # Pytest 测试
+release/SSHFerry-<version>-windows/
+release/SSHFerry-<version>-windows.zip
+release/SSHFerry-<version>-windows.sha256
 ```
 
-## 说明
+重要说明：
 
-- 默认不持久化保存密码。如果你在密码认证站点勾选 `Save password to sites.json`，密码会保存到本机站点配置文件
-- 站点存储路径：
-  - Windows：`%USERPROFILE%\AppData\Local\SSHFerry\sites.json`
-  - Linux/macOS：`~/.config/sshferry/sites.json`
-- 当前项目定位仍然是个人与学习用途
-- 为了更安全，建议使用最小权限账号，并尽量避免把 `remote_root` 设为根目录
+- 📦 发布时请分发整个目录或生成的 `.zip`，不要只发 `.exe`
+- 🧱 打包使用 `onedir` 布局，以保证 Qt 运行时稳定
+- 🚫 默认禁用 UPX
+
+## 性能说明
+
+- ⚡ 大文件在达到阈值后会自动切换到并行 SFTP
+- 🎛️ 默认预设策略会根据传输方向自动调整
+- 🧵 调度器并发度会按引擎类型分别控制
+
+默认调度并发：
+
+- `max_workers_total=3`
+- `max_workers_sftp=3`
+- `max_workers_scp=2`
+- `max_workers_parallel=1`
+
+可用环境变量：
+
+- `SSHFERRY_PARALLEL_WORKERS`
+- `SSHFERRY_PARALLEL_CHUNK_BYTES`
+- `SSHFERRY_PARALLEL_WARMUP_BATCH`
+- `SSHFERRY_PARALLEL_WARMUP_DELAY`
+- `SSHFERRY_PARALLEL_MAX_CHUNK_RETRIES`
+- `SSHFERRY_STRICT_HOSTKEY`
+
+性能脚本：
+
+```bash
+python tools/benchmark_transfer.py --site "<your-site-name>" --size-mb 512 --iterations 2
+```
+
+## 存储与安全
+
+- 🔐 默认不持久化保存密码
+- 💾 如果启用了密码保存，凭据会保存在当前机器本地
+- 🧱 更安全的做法是使用最小权限账户，并限制 `remote_root`
+
+站点存储路径：
+
+- Windows：`%USERPROFILE%\AppData\Local\SSHFerry\sites.json`
+- Linux / macOS：`~/.config/sshferry/sites.json`
+
+## 当前状态
+
+- ✅ PySide6 桌面客户端可用，仍是当前主要入口
+- 🔌 FastAPI 后端已接入核心传输逻辑
+- 🚧 React 前端已在仓库中并持续集成中
+
+如果你现在就要开始实际使用或继续开发，建议把桌面端视为稳定入口，把前后端拆分架构视为下一阶段演进方向。
