@@ -35,6 +35,8 @@ class RemoteToRemoteTransferEngine:
         self.parallel_threshold = parallel_threshold
         self.relay_download_preset = relay_download_preset
         self.relay_upload_preset = relay_upload_preset
+        self.folder_file_workers = max(1, int(os.getenv("SSHFERRY_FOLDER_FILE_WORKERS", "3") or "3"))
+        self.folder_parallel_file_slots = max(1, int(os.getenv("SSHFERRY_FOLDER_PARALLEL_FILE_SLOTS", "1") or "1"))
 
     def transfer_file(
         self,
@@ -215,7 +217,7 @@ class RemoteToRemoteTransferEngine:
         dst_dir: str,
         callback: Optional[Callable[[int, int], None]] = None,
         check_interrupt: Optional[Callable[[], bool]] = None,
-    ) -> None:
+    ) -> int:
         src_engine = SftpEngine(self.src_site, self.logger)
         dst_engine = SftpEngine(self.dst_site, self.logger)
         try:
@@ -224,7 +226,15 @@ class RemoteToRemoteTransferEngine:
             total = self._remote_dir_size(src_engine, src_dir)
             if callback:
                 callback(0, total)
-            self._stream_dir_between_engines(src_engine, dst_engine, src_dir, dst_dir, total, callback, check_interrupt)
+            return self._stream_dir_between_engines(
+                src_engine,
+                dst_engine,
+                src_dir,
+                dst_dir,
+                total,
+                callback,
+                check_interrupt,
+            )
         finally:
             dst_engine.disconnect()
             src_engine.disconnect()
@@ -239,55 +249,122 @@ class RemoteToRemoteTransferEngine:
         callback: Optional[Callable[[int, int], None]],
         check_interrupt: Optional[Callable[[], bool]],
     ) -> int:
-        try:
-            dst_engine.mkdir(dst_dir)
-        except SSHFerryError:
-            pass
-        bytes_done = 0
+        items: list[tuple[str, str, bool, int]] = []
 
         def walk(current_src: str, current_dst: str) -> None:
-            nonlocal bytes_done
             for entry in src_engine.list_dir(current_src):
                 if check_interrupt and check_interrupt():
                     raise InterruptedError("Task interrupted")
                 target_path = f"{current_dst.rstrip('/')}/{entry.name}"
                 if entry.is_dir:
-                    try:
-                        dst_engine.mkdir(target_path)
-                    except SSHFerryError:
-                        pass
+                    items.append((entry.path, target_path, True, 0))
                     walk(entry.path, target_path)
-                    continue
-
-                if entry.size >= self.parallel_threshold:
-                    start_offset = bytes_done
-
-                    def file_progress(done: int, _file_total: int) -> None:
-                        if callback:
-                            callback(min(total, start_offset + done), total)
-
-                    self._transfer_file_parallel_bridge(
-                        entry.path,
-                        target_path,
-                        entry.size,
-                        callback=file_progress,
-                        check_interrupt=check_interrupt,
-                    )
                 else:
-                    self._stream_file_between_engines(
-                        src_engine,
-                        dst_engine,
-                        entry.path,
-                        target_path,
-                        entry.size,
-                        callback=None,
-                        check_interrupt=check_interrupt,
-                    )
-                bytes_done += entry.size
-                if callback:
-                    callback(min(total, bytes_done), total)
+                    items.append((entry.path, target_path, False, entry.size))
 
         walk(src_dir, dst_dir)
+
+        for directory in [dst_dir, *[item[1] for item in items if item[2]]]:
+            try:
+                dst_engine.mkdir(directory)
+            except SSHFerryError:
+                pass
+
+        files = [item for item in items if not item[2]]
+        queue: Queue[tuple[str, str, int]] = Queue()
+        for src_path, dst_path, _is_dir, size in files:
+            queue.put((src_path, dst_path, size))
+
+        bytes_done = 0
+        transferred: dict[str, int] = {}
+        progress_lock = threading.Lock()
+        stop_state = {"triggered": False}
+        first_error: list[Exception] = []
+        parallel_slots = {"active": 0}
+        parallel_lock = threading.Lock()
+
+        def add_progress(file_key: str, absolute_done: int) -> None:
+            nonlocal bytes_done
+            with progress_lock:
+                previous = transferred.get(file_key, 0)
+                delta = max(0, absolute_done - previous)
+                transferred[file_key] = absolute_done
+                bytes_done = min(total, bytes_done + delta)
+                if callback:
+                    callback(bytes_done, total)
+
+        def acquire_parallel_slot() -> None:
+            while True:
+                if check_interrupt and check_interrupt():
+                    raise InterruptedError("Task interrupted")
+                with parallel_lock:
+                    if parallel_slots["active"] < self.folder_parallel_file_slots:
+                        parallel_slots["active"] += 1
+                        return
+                threading.Event().wait(0.02)
+
+        def release_parallel_slot() -> None:
+            with parallel_lock:
+                parallel_slots["active"] = max(0, parallel_slots["active"] - 1)
+
+        def worker() -> None:
+            while not stop_state["triggered"]:
+                try:
+                    src_path, dst_path, size = queue.get(timeout=0.1)
+                except Empty:
+                    if queue.empty():
+                        break
+                    continue
+                try:
+                    if check_interrupt and check_interrupt():
+                        stop_state["triggered"] = True
+                        return
+                    if size >= self.parallel_threshold:
+                        acquire_parallel_slot()
+                        try:
+                            self._transfer_file_parallel_bridge(
+                                src_path,
+                                dst_path,
+                                size,
+                                callback=lambda done, _total, key=src_path: add_progress(key, done),
+                                check_interrupt=check_interrupt,
+                            )
+                        finally:
+                            release_parallel_slot()
+                    else:
+                        worker_src = SftpEngine(self.src_site, self.logger)
+                        worker_dst = SftpEngine(self.dst_site, self.logger)
+                        try:
+                            worker_src.connect()
+                            worker_dst.connect()
+                            self._stream_file_between_engines(
+                                worker_src,
+                                worker_dst,
+                                src_path,
+                                dst_path,
+                                size,
+                                callback=lambda done, _total, key=src_path: add_progress(key, done),
+                                check_interrupt=check_interrupt,
+                            )
+                        finally:
+                            worker_dst.disconnect()
+                            worker_src.disconnect()
+                    add_progress(src_path, size)
+                except Exception as exc:
+                    if not first_error:
+                        first_error.append(exc)
+                    stop_state["triggered"] = True
+                    return
+                finally:
+                    queue.task_done()
+
+        worker_count = max(1, min(self.folder_file_workers, max(1, len(files))))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [executor.submit(worker) for _ in range(worker_count)]
+            wait(futures)
+
+        if first_error:
+            raise first_error[0]
         return bytes_done
 
     def _stream_file_between_engines(

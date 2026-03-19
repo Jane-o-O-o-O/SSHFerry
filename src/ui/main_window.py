@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
         self.btn_add_site.setToolTip("Add Site")
         self.btn_add_site.clicked.connect(self._add_site)
         self._configure_site_icon_button(self.btn_add_site)
-        site_actions_layout.addWidget(self.btn_add_site)
+        site_actions_layout.addWidget(self.btn_add_site, 1)
 
         self.btn_edit_site = QPushButton()
         self.btn_edit_site.setProperty("chrome", "icon")
@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         self.btn_edit_site.setToolTip("Edit Site")
         self.btn_edit_site.clicked.connect(self._edit_site)
         self._configure_site_icon_button(self.btn_edit_site)
-        site_actions_layout.addWidget(self.btn_edit_site)
+        site_actions_layout.addWidget(self.btn_edit_site, 1)
 
         self.btn_check_connection = QPushButton()
         self.btn_check_connection.setProperty("chrome", "icon")
@@ -248,7 +248,7 @@ class MainWindow(QMainWindow):
         self.btn_check_connection.setToolTip("Check Connection")
         self.btn_check_connection.clicked.connect(self._check_connection)
         self._configure_site_icon_button(self.btn_check_connection)
-        site_actions_layout.addWidget(self.btn_check_connection)
+        site_actions_layout.addWidget(self.btn_check_connection, 1)
 
         self.btn_remove_site = QPushButton()
         self.btn_remove_site.setProperty("chrome", "icon")
@@ -257,9 +257,7 @@ class MainWindow(QMainWindow):
         self.btn_remove_site.setToolTip("Remove Site")
         self.btn_remove_site.clicked.connect(self._remove_site)
         self._configure_site_icon_button(self.btn_remove_site)
-        site_actions_layout.addWidget(self.btn_remove_site)
-
-        site_actions_layout.addStretch()
+        site_actions_layout.addWidget(self.btn_remove_site, 1)
         left_lay.addWidget(site_actions)
 
         self.btn_new_session = QPushButton("Connect")
@@ -516,8 +514,10 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _configure_site_icon_button(button: QPushButton) -> None:
-        button.setFixedSize(40, 40)
-        button.setIconSize(QSize(24, 24))
+        button.setObjectName("siteActionButton")
+        button.setMinimumHeight(42)
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button.setIconSize(QSize(30, 30))
 
     def _add_site(self):
         dlg = SiteEditorDialog(parent=self)
@@ -628,9 +628,9 @@ class MainWindow(QMainWindow):
         selected_box = QCheckBox()
         selected_box.setToolTip("Select this session for batch disconnect")
         selected_box.stateChanged.connect(lambda _state, sid=session_id: self._update_site_action_buttons())
-        session_label = QLabel(site.name)
-        session_label.setObjectName("sectionTitle")
         selector = QComboBox()
+        selector.setObjectName("sessionSiteSelector")
+        selector.setMinimumWidth(220)
         self._populate_site_selector(selector, site.name)
         status_label = QLabel("Disconnected")
         status_label.setObjectName("mutedLabel")
@@ -641,7 +641,6 @@ class MainWindow(QMainWindow):
         btn_close.setProperty("variant", "danger")
         btn_close.clicked.connect(lambda: self._close_session(session_id))
         header.addWidget(selected_box)
-        header.addWidget(session_label)
         header.addWidget(selector, 1)
         header.addWidget(btn_refresh)
         header.addWidget(btn_close)

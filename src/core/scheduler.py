@@ -5,7 +5,8 @@ import logging
 import os
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
+from queue import Empty, Queue
 from threading import Lock, Thread
 from typing import Dict, List, Optional
 
@@ -80,6 +81,8 @@ class TaskScheduler:
             parallel_threshold,
             1,
         )
+        self.folder_file_workers = _env_int("SSHFERRY_FOLDER_FILE_WORKERS", 3, 1)
+        self.folder_parallel_file_slots = _env_int("SSHFERRY_FOLDER_PARALLEL_FILE_SLOTS", 1, 1)
         self.logger = logger or logging.getLogger(__name__)
 
         self.tasks: Dict[str, Task] = {}
@@ -177,6 +180,11 @@ class TaskScheduler:
                 return False
             self._set_task_status_locked(task, "pending")
             task.paused = False
+            if task.kind == "folder_transfer":
+                task.bytes_done = 0
+                task.speed = 0.0
+                task.subtask_done = 0
+                task.current_file = ""
             if task_id not in self.queued_task_ids:
                 self.task_queue.append(task_id)
                 self.queued_task_ids.add(task_id)
@@ -743,6 +751,18 @@ class TaskScheduler:
             engine.disconnect()
 
     def _upload_dir_recursive(self, engine: SftpEngine, task: Task, local_dir: str, remote_dir: str):
+        if hasattr(engine, "site_config") or hasattr(engine, "connect"):
+            self._execute_folder_upload_parallelized(engine, task, local_dir, remote_dir)
+            return
+        self._upload_dir_recursive_legacy(engine, task, local_dir, remote_dir)
+
+    def _download_dir_recursive(self, engine: SftpEngine, task: Task, remote_dir: str, local_dir: str):
+        if hasattr(engine, "site_config") or hasattr(engine, "connect"):
+            self._execute_folder_download_parallelized(engine, task, remote_dir, local_dir)
+            return
+        self._download_dir_recursive_legacy(engine, task, remote_dir, local_dir)
+
+    def _upload_dir_recursive_legacy(self, engine: SftpEngine, task: Task, local_dir: str, remote_dir: str):
         try:
             engine.mkdir(remote_dir)
         except SSHFerryError:
@@ -790,9 +810,9 @@ class TaskScheduler:
                     task.subtask_done += 1
                     task.bytes_done = min(task.bytes_total, base_bytes + file_size)
             elif os.path.isdir(full_path):
-                self._upload_dir_recursive(engine, task, full_path, remote_path)
+                self._upload_dir_recursive_legacy(engine, task, full_path, remote_path)
 
-    def _download_dir_recursive(self, engine: SftpEngine, task: Task, remote_dir: str, local_dir: str):
+    def _download_dir_recursive_legacy(self, engine: SftpEngine, task: Task, remote_dir: str, local_dir: str):
         os.makedirs(local_dir, exist_ok=True)
         entries = engine.list_dir(remote_dir)
         check_interrupt = self._interrupt_checker(task)
@@ -801,7 +821,7 @@ class TaskScheduler:
                 raise InterruptedError("Task interrupted")
             local_path = os.path.join(local_dir, entry.name)
             if entry.is_dir:
-                self._download_dir_recursive(engine, task, entry.path, local_path)
+                self._download_dir_recursive_legacy(engine, task, entry.path, local_path)
                 continue
             offset = 0
             skip_file = False
@@ -832,6 +852,286 @@ class TaskScheduler:
             with self.task_lock:
                 task.subtask_done += 1
                 task.bytes_done = min(task.bytes_total, base_bytes + entry.size)
+
+    def _execute_folder_upload_parallelized(self, engine: SftpEngine, task: Task, local_dir: str, remote_dir: str) -> None:
+        file_items = self._scan_local_folder_tree(local_dir, remote_dir)
+        self._ensure_remote_directories(engine, [remote_dir, *[item[1] for item in file_items if item[2]]])
+        files = [item for item in file_items if not item[2]]
+        self._run_local_folder_transfer_workers(task, files, direction="upload", probe_engine=engine)
+
+    def _execute_folder_download_parallelized(self, engine: SftpEngine, task: Task, remote_dir: str, local_dir: str) -> None:
+        file_items = self._scan_remote_folder_tree(engine, remote_dir, local_dir)
+        self._ensure_local_directories([local_dir, *[item[1] for item in file_items if item[2]]])
+        files = [item for item in file_items if not item[2]]
+        self._run_local_folder_transfer_workers(task, files, direction="download")
+
+    def _scan_local_folder_tree(self, local_dir: str, remote_dir: str) -> list[tuple[str, str, bool, int]]:
+        items: list[tuple[str, str, bool, int]] = []
+        for root, dir_names, file_names in os.walk(local_dir):
+            rel_root = os.path.relpath(root, local_dir)
+            current_remote = remote_dir if rel_root == "." else f"{remote_dir.rstrip('/')}/{rel_root.replace(os.sep, '/')}"
+            for dir_name in dir_names:
+                items.append((os.path.join(root, dir_name), f"{current_remote.rstrip('/')}/{dir_name}", True, 0))
+            for file_name in file_names:
+                full_path = os.path.join(root, file_name)
+                items.append((full_path, f"{current_remote.rstrip('/')}/{file_name}", False, os.path.getsize(full_path)))
+        return items
+
+    def _scan_remote_folder_tree(self, engine: SftpEngine, remote_dir: str, local_dir: str) -> list[tuple[str, str, bool, int]]:
+        items: list[tuple[str, str, bool, int]] = []
+
+        def walk(current_remote: str, current_local: str) -> None:
+            for entry in engine.list_dir(current_remote):
+                target_local = os.path.join(current_local, entry.name)
+                if entry.is_dir:
+                    items.append((entry.path, target_local, True, 0))
+                    walk(entry.path, target_local)
+                else:
+                    items.append((entry.path, target_local, False, entry.size))
+
+        walk(remote_dir, local_dir)
+        return items
+
+    def _ensure_remote_directories(self, engine: SftpEngine, directories: list[str]) -> None:
+        for directory in sorted(set(directories), key=lambda value: (value.count("/"), value)):
+            try:
+                engine.mkdir(directory)
+            except SSHFerryError:
+                try:
+                    existing = engine.stat(directory)
+                except SSHFerryError:
+                    continue
+                if not existing.is_dir:
+                    raise
+
+    @staticmethod
+    def _ensure_local_directories(directories: list[str]) -> None:
+        for directory in sorted(set(directories), key=lambda value: (value.count(os.sep), value)):
+            os.makedirs(directory, exist_ok=True)
+
+    def _run_local_folder_transfer_workers(
+        self,
+        task: Task,
+        files: list[tuple[str, str, bool, int]],
+        *,
+        direction: str,
+        probe_engine: Optional[SftpEngine] = None,
+    ) -> None:
+        queue: Queue[tuple[str, str, int]] = Queue()
+        for src_path, dst_path, _is_dir, size in files:
+            queue.put((src_path, dst_path, size))
+
+        site = self._require_site(
+            task.dst_site_snapshot if direction == "upload" else task.src_site_snapshot,
+            f"folder {direction} endpoint",
+        )
+        progress_lock = Lock()
+        stop_state = {"triggered": False}
+        parallel_slots = Lock()
+        slot_counter = {"active": 0}
+        transferred: dict[str, int] = {}
+        first_error: list[Exception] = []
+        check_interrupt = self._interrupt_checker(task)
+
+        def acquire_parallel_slot() -> None:
+            while True:
+                if check_interrupt():
+                    raise InterruptedError("Task interrupted")
+                with parallel_slots:
+                    if slot_counter["active"] < self.folder_parallel_file_slots:
+                        slot_counter["active"] += 1
+                        return
+                time.sleep(0.02)
+
+        def release_parallel_slot() -> None:
+            with parallel_slots:
+                slot_counter["active"] = max(0, slot_counter["active"] - 1)
+
+        def add_progress(file_key: str, absolute_done: int) -> None:
+            with self.task_lock, progress_lock:
+                previous = transferred.get(file_key, 0)
+                delta = max(0, absolute_done - previous)
+                transferred[file_key] = absolute_done
+                task.bytes_done = min(task.bytes_total, task.bytes_done + delta)
+                task.current_file = os.path.basename(file_key)
+                if task.start_time:
+                    elapsed = time.time() - task.start_time
+                    if elapsed > 0:
+                        task.speed = task.bytes_done / elapsed
+
+        def mark_complete(file_key: str, file_size: int) -> None:
+            with self.task_lock, progress_lock:
+                previous = transferred.get(file_key, 0)
+                if previous < file_size:
+                    task.bytes_done = min(task.bytes_total, task.bytes_done + (file_size - previous))
+                    transferred[file_key] = file_size
+                task.subtask_done += 1
+                task.current_file = os.path.basename(file_key)
+
+        def worker() -> None:
+            while not stop_state["triggered"]:
+                try:
+                    src_path, dst_path, file_size = queue.get(timeout=0.1)
+                except Empty:
+                    if queue.empty():
+                        break
+                    continue
+                file_key = src_path
+                try:
+                    if check_interrupt():
+                        stop_state["triggered"] = True
+                        return
+                    if direction == "upload":
+                        self._transfer_folder_upload_file(
+                            task,
+                            site,
+                            src_path,
+                            dst_path,
+                            file_size,
+                            file_key,
+                            add_progress,
+                            mark_complete,
+                            acquire_parallel_slot,
+                            release_parallel_slot,
+                            probe_engine=probe_engine,
+                        )
+                    else:
+                        self._transfer_folder_download_file(task, site, src_path, dst_path, file_size, file_key, add_progress, mark_complete, acquire_parallel_slot, release_parallel_slot)
+                except Exception as exc:
+                    if not first_error:
+                        first_error.append(exc)
+                    stop_state["triggered"] = True
+                    return
+                finally:
+                    queue.task_done()
+
+        worker_count = max(1, min(self.folder_file_workers, max(1, len(files))))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [executor.submit(worker) for _ in range(worker_count)]
+            wait(futures)
+
+        if first_error:
+            raise first_error[0]
+
+    def _transfer_folder_upload_file(
+        self,
+        task: Task,
+        site: SiteConfig,
+        local_path: str,
+        remote_path: str,
+        file_size: int,
+        file_key: str,
+        add_progress,
+        mark_complete,
+        acquire_parallel_slot,
+        release_parallel_slot,
+        probe_engine: Optional[SftpEngine] = None,
+    ) -> None:
+        offset = 0
+        skip_file = False
+        inspector = probe_engine if probe_engine is not None and not hasattr(probe_engine, "connect") else SftpEngine(site, self.logger)
+        should_disconnect = inspector is not probe_engine
+        if should_disconnect:
+            inspector.connect()
+        try:
+            try:
+                stats = inspector.stat(remote_path)
+                if stats.size == file_size:
+                    skip_file = True
+                elif stats.size < file_size:
+                    offset = stats.size
+            except SSHFerryError as exc:
+                if exc.code != ErrorCode.PATH_NOT_FOUND:
+                    raise
+        finally:
+            if should_disconnect:
+                inspector.disconnect()
+        if skip_file:
+            add_progress(file_key, file_size)
+            mark_complete(file_key, file_size)
+            return
+        if offset:
+            add_progress(file_key, offset)
+        if file_size >= self.parallel_threshold and offset == 0:
+            acquire_parallel_slot()
+            try:
+                engine = ParallelSftpEngine(site, self.logger, preset_name=self.parallel_upload_preset)
+                engine.upload_file(
+                    local_path,
+                    remote_path,
+                    callback=lambda done, _total: add_progress(file_key, done),
+                    check_interrupt=self._interrupt_checker(task),
+                )
+            finally:
+                release_parallel_slot()
+        else:
+            engine = SftpEngine(site, self.logger)
+            engine.connect()
+            try:
+                engine.upload_file(
+                    local_path,
+                    remote_path,
+                    callback=lambda done, _total: add_progress(file_key, done),
+                    check_interrupt=self._interrupt_checker(task),
+                    offset=offset,
+                )
+            finally:
+                engine.disconnect()
+        mark_complete(file_key, file_size)
+
+    def _transfer_folder_download_file(
+        self,
+        task: Task,
+        site: SiteConfig,
+        remote_path: str,
+        local_path: str,
+        file_size: int,
+        file_key: str,
+        add_progress,
+        mark_complete,
+        acquire_parallel_slot,
+        release_parallel_slot,
+    ) -> None:
+        offset = 0
+        skip_file = False
+        if os.path.exists(local_path):
+            local_size = os.path.getsize(local_path)
+            if local_size == file_size:
+                skip_file = True
+            elif local_size < file_size:
+                offset = local_size
+        if skip_file:
+            add_progress(file_key, file_size)
+            mark_complete(file_key, file_size)
+            return
+        if offset:
+            add_progress(file_key, offset)
+        if file_size >= self.parallel_threshold and offset == 0:
+            acquire_parallel_slot()
+            try:
+                engine = ParallelSftpEngine(site, self.logger, preset_name=self.parallel_download_preset)
+                engine.download_file(
+                    remote_path,
+                    local_path,
+                    callback=lambda done, _total: add_progress(file_key, done),
+                    check_interrupt=self._interrupt_checker(task),
+                )
+            finally:
+                release_parallel_slot()
+        else:
+            engine = SftpEngine(site, self.logger)
+            engine.connect()
+            try:
+                engine.download_file(
+                    remote_path,
+                    local_path,
+                    callback=lambda done, _total: add_progress(file_key, done),
+                    check_interrupt=self._interrupt_checker(task),
+                    offset=offset,
+                )
+            finally:
+                engine.disconnect()
+        mark_complete(file_key, file_size)
 
     def _metric_preset_for_task(self, task: Task) -> str:
         if task.engine != "parallel":

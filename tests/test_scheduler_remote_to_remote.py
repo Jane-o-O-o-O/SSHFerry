@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 from src.core.scheduler import TaskScheduler
 from src.shared.errors import ErrorCode, SSHFerryError
@@ -182,3 +183,60 @@ def test_remote_to_remote_bridge_uses_parallel_workers_for_large_file():
     dst_worker_file.seek.assert_called_with(0)
     dst_worker_file.write.assert_called_once_with(src_data)
     assert mock_parallel_cls.call_count == 2
+
+
+def test_remote_to_remote_dir_relay_parallelizes_large_child_file():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine") as mock_sftp_cls:
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        bootstrap_src = MagicMock()
+        bootstrap_dst = MagicMock()
+        small_src = MagicMock()
+        small_dst = MagicMock()
+        mock_sftp_cls.side_effect = [bootstrap_src, bootstrap_dst, small_src, small_dst]
+
+        bootstrap_src.list_dir.side_effect = [
+            [
+                SimpleNamespace(name="small.txt", path="/data/src/small.txt", is_dir=False, size=8),
+                SimpleNamespace(name="big.bin", path="/data/src/big.bin", is_dir=False, size=64),
+            ],
+            [
+                SimpleNamespace(name="small.txt", path="/data/src/small.txt", is_dir=False, size=8),
+                SimpleNamespace(name="big.bin", path="/data/src/big.bin", is_dir=False, size=64),
+            ]
+        ]
+        bootstrap_dst.mkdir.return_value = None
+
+        src_file = MagicMock()
+        src_file.read.side_effect = [b"12345678", b""]
+        small_src.sftp_client.open.return_value.__enter__.return_value = src_file
+        dst_file = MagicMock()
+        small_dst.sftp_client.open.return_value.__enter__.return_value = dst_file
+
+        progress: list[int] = []
+        bridge_calls: list[tuple[str, str, int]] = []
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=16)
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_parallel_bridge",
+            side_effect=lambda src, dst, total, callback=None, check_interrupt=None: (
+                bridge_calls.append((src, dst, total)),
+                callback and callback(total, total),
+            ),
+        ):
+            bytes_done = engine._transfer_dir_relay(
+                "/data/src",
+                "/data/dst",
+                callback=lambda done, _total: progress.append(done),
+            )
+
+    assert bytes_done == 72
+    assert bridge_calls == [("/data/src/big.bin", "/data/dst/big.bin", 64)]
+    dst_file.write.assert_called_once_with(b"12345678")
+    assert progress[-1] == 72

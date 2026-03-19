@@ -88,6 +88,43 @@ QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBo
     border: 1px solid {TOKENS.accent};
 }}
 
+QComboBox#sessionSiteSelector {{
+    background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.98)};
+    border: 1px solid {alpha_hex(TOKENS.accent, 0.34)};
+    border-radius: {TOKENS.radius_md}px;
+    padding: 7px 34px 7px 12px;
+    min-height: 20px;
+    font-weight: 600;
+}}
+
+QComboBox#sessionSiteSelector:hover {{
+    background-color: {TOKENS.bg_panel_alt};
+    border-color: {alpha_hex(TOKENS.accent, 0.52)};
+}}
+
+QComboBox#sessionSiteSelector:focus {{
+    border: 1px solid {TOKENS.accent};
+    background-color: {alpha_hex(TOKENS.accent, 0.08)};
+}}
+
+QComboBox#sessionSiteSelector::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 28px;
+    border-left: 1px solid {alpha_hex(TOKENS.accent, 0.18)};
+    background-color: {alpha_hex(TOKENS.accent, 0.08)};
+    border-top-right-radius: {TOKENS.radius_md}px;
+    border-bottom-right-radius: {TOKENS.radius_md}px;
+}}
+
+QComboBox#sessionSiteSelector QAbstractItemView {{
+    background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.98)};
+    border: 1px solid {TOKENS.line_soft};
+    selection-background-color: {alpha_hex(TOKENS.accent, 0.2)};
+    selection-color: {TOKENS.text_main};
+    outline: none;
+}}
+
 QPushButton {{
     background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.9)};
     border: 1px solid {TOKENS.line_soft};
@@ -142,12 +179,33 @@ QPushButton[chrome="icon"]:pressed {{
     background-color: {TOKENS.accent_soft};
 }}
 
+QPushButton#siteActionButton {{
+    min-width: 0;
+    max-width: 16777215px;
+    min-height: 42px;
+    max-height: 42px;
+    padding: 0;
+    border: 1px solid {TOKENS.line_soft};
+    border-radius: {TOKENS.radius_sm}px;
+    background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.94)};
+}}
+
+QPushButton#siteActionButton:hover {{
+    background-color: {TOKENS.bg_panel_alt};
+    border-color: {TOKENS.line_strong};
+}}
+
+QPushButton#siteActionButton:pressed {{
+    background-color: {TOKENS.accent_soft};
+}}
+
 QListWidget, QTreeView, QTreeWidget, QTableWidget, QTextEdit#logOutput {{
     background-color: {alpha_hex(TOKENS.bg_panel_strong, 0.96)};
     alternate-background-color: {TOKENS.bg_panel_alt};
     border: 1px solid {TOKENS.line_soft};
     border-radius: {TOKENS.radius_md}px;
     gridline-color: {TOKENS.line_soft};
+    outline: none;
 }}
 
 QListWidget::item, QTreeView::item, QTreeWidget::item, QTableWidget::item {{
@@ -157,6 +215,7 @@ QListWidget::item, QTreeView::item, QTreeWidget::item, QTableWidget::item {{
 QListWidget::item:selected, QTreeView::item:selected, QTreeWidget::item:selected, QTableWidget::item:selected {{
     background-color: {TOKENS.accent};
     color: #f8fbfc;
+    outline: none;
 }}
 
 QListWidget#siteList::item {{
@@ -177,6 +236,22 @@ QListWidget#siteList::item:selected:!active {{
 
 QListWidget::item:hover, QTreeView::item:hover, QTreeWidget::item:hover, QTableWidget::item:hover {{
     background-color: {TOKENS.accent_soft};
+}}
+
+QListWidget::item:selected:hover,
+QListWidget::item:selected:active:hover,
+QListWidget::item:selected:!active:hover,
+QTreeView::item:selected:hover,
+QTreeView::item:selected:active:hover,
+QTreeView::item:selected:!active:hover,
+QTreeWidget::item:selected:hover,
+QTreeWidget::item:selected:active:hover,
+QTreeWidget::item:selected:!active:hover,
+QTableWidget::item:selected:hover,
+QTableWidget::item:selected:active:hover,
+QTableWidget::item:selected:!active:hover {{
+    background-color: {TOKENS.accent};
+    color: #f8fbfc;
 }}
 
 QHeaderView::section {{

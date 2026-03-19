@@ -129,6 +129,35 @@ def test_restart_done_folder_task_resets_subtask_counters():
     assert task.subtask_count == 3
 
 
+def test_resume_paused_folder_task_rebuilds_aggregate_progress():
+    mock_scheduler = create_mock_scheduler()
+    task = Task(
+        task_id="t4_resume",
+        kind="folder_transfer",
+        engine="sftp",
+        src="/remote/folder",
+        dst="local/folder",
+        bytes_total=1000,
+        bytes_done=640,
+        subtask_count=3,
+        subtask_done=2,
+        current_file="b.bin",
+        status="paused",
+        paused=True,
+        speed=12.5,
+    )
+    mock_scheduler.add_task(task)
+
+    assert mock_scheduler.resume_task("t4_resume") is True
+    assert task.status == "pending"
+    assert task.paused is False
+    assert task.bytes_done == 0
+    assert task.subtask_done == 0
+    assert task.current_file == ""
+    assert task.speed == 0.0
+    assert task.subtask_count == 3
+
+
 def test_folder_download_updates_progress_during_file_transfer(tmp_path):
     scheduler = create_mock_scheduler()
     task = Task(
@@ -229,3 +258,53 @@ def test_folder_upload_updates_progress_during_file_transfer(tmp_path):
     assert task.subtask_done == 1
     assert task.bytes_done == 1000
     assert progress_snapshots == [400]
+
+
+def test_folder_upload_parallelizes_large_child_file(tmp_path):
+    scheduler = create_mock_scheduler()
+    local_dir = tmp_path / "up_parallel"
+    local_dir.mkdir()
+    local_file = local_dir / "big.bin"
+    local_file.write_bytes(b"x" * 32)
+    scheduler.parallel_threshold = 16
+
+    task = Task(
+        task_id="fu2",
+        kind="folder_transfer",
+        engine="sftp",
+        src=str(local_dir),
+        dst="/remote",
+        bytes_total=32,
+        subtask_count=1,
+        dst_site_snapshot=scheduler.site_config,
+    )
+    task.start_time = time.time()
+
+    class BootstrapEngine:
+        def mkdir(self, _path):
+            return None
+
+        def stat(self, _path):
+            raise SSHFerryError(ErrorCode.PATH_NOT_FOUND, "not found")
+
+        @property
+        def site_config(self):
+            return scheduler.site_config
+
+    parallel_calls: list[tuple[str, str]] = []
+
+    class FakeParallel:
+        def __init__(self, _site, _logger, preset_name=None):
+            self.preset_name = preset_name
+
+        def upload_file(self, src, dst, callback=None, check_interrupt=None):
+            parallel_calls.append((src, dst))
+            if callback:
+                callback(32, 32)
+
+    with patch("src.core.scheduler.ParallelSftpEngine", FakeParallel):
+        scheduler._upload_dir_recursive(BootstrapEngine(), task, str(local_dir), "/remote")
+
+    assert parallel_calls == [(str(local_file), "/remote/big.bin")]
+    assert task.subtask_done == 1
+    assert task.bytes_done == 32
