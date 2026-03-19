@@ -7,10 +7,13 @@ __pycache__/
 
 # Python tooling caches
 .pytest_cache/
+.pytest_tmp/
 .ruff_cache/
 .mypy_cache/
 .pyre/
 .hypothesis/
+pytest_temp_root/
+.tmp_test_*/
 
 # Test / coverage outputs
 .coverage

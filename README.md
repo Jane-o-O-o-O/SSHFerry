@@ -2,54 +2,52 @@
 
 [中文](README_zh.md) | English
 
-SSHFerry is an SSH file transfer workspace focused on safe remote operations, practical transfer behavior, and clear task visibility.
+SSHFerry is a multi-session SSH file transfer workspace focused on safe remote operations, visible task flow, and practical day-to-day transfer work.
 
-Today the repository contains three layers:
+## Overview
 
-- A working desktop client built with Python + PySide6
-- A local FastAPI backend that exposes the core transfer logic as APIs
-- A React + Vite frontend that is being integrated against that backend
-
-The desktop client is still the primary runnable app. The backend and frontend are already in the repo and are intended for the next UI architecture.
+- 🖥️ Desktop client: Python + PySide6, currently the main runnable app
+- 🧩 Backend service: FastAPI layer exposing local transfer APIs
+- 🌐 Frontend app: React + Vite UI under active integration
 
 ## Highlights
 
-- Sandbox-protected remote operations through `remote_root`
-- Upload and download for files and folders
-- Resume and skip-aware transfer behavior
-- Built-in connection checking for TCP / SSH / SFTP / read-write access
-- Task center with pause / resume / cancel / restart
-- Parallel chunk transfer for large files
-- Multiple remote sessions in one window
-- Remote-to-remote copy by dragging between remote sessions
+- 🔒 `remote_root` sandbox protection for remote operations
+- 📁 Upload and download for both files and folders
+- 🔁 Resume and skip-aware transfer behavior
+- 🧪 Built-in connection checks for TCP, SSH, SFTP, and write access
+- 📊 Task center with pause, resume, cancel, and restart
+- ⚡ Parallel chunk transfer for large files
+- 🪟 Multiple remote sessions in one window
+- 🔀 Remote-to-remote copy by drag and drop
 
-## Current Architecture
+## Architecture
 
-### Desktop client
+### 🖥️ Desktop Client
 
 - Runtime: Python `3.11+`
 - UI: `PySide6`
-- Entry point: `python -m src.app.main`
+- Entry: `python -m src.app.main`
 
-### Backend
+### 🧩 Backend
 
 - Runtime: Python `3.11+`
 - Framework: `FastAPI` + `uvicorn`
-- Entry point: `python -m backend.app.main`
+- Entry: `python -m backend.app.main`
 
-### Frontend
+### 🌐 Frontend
 
 - Runtime: Node.js
 - Stack: `React` + `TypeScript` + `Vite`
-- Dev server: `npm run dev` inside `frontend/`
+- Dev server: `npm run dev` in `frontend/`
 
-### Transfer engines
+### 🚚 Transfer Engines
 
 - `sftp`: default transfer engine
-- `parallel`: optimized chunked transfer for large files
-- `scp`: manual protocol override with overwrite-oriented behavior
+- `parallel`: chunked transfer for large files
+- `scp`: manual override for overwrite-oriented behavior
 
-### Task states
+### 📌 Task States
 
 - `pending`
 - `running`
@@ -72,21 +70,21 @@ tools/      Build and benchmark scripts
 
 ## Documentation
 
-- Overview docs: [docs/README.md](docs/README.md)
-- Frontend build notes: [docs/frontend/FRONTEND_BUILD.md](docs/frontend/FRONTEND_BUILD.md)
-- Frontend API notes: [docs/frontend/FRONTEND_API.md](docs/frontend/FRONTEND_API.md)
-- Backend worklist: [docs/backend/BACKEND_TODO.md](docs/backend/BACKEND_TODO.md)
-- Historical architecture notes: [docs/architecture/agent.md](docs/architecture/agent.md)
+- 📘 Overview: [docs/README.md](docs/README.md)
+- 🧱 Frontend build notes: [docs/frontend/FRONTEND_BUILD.md](docs/frontend/FRONTEND_BUILD.md)
+- 🔌 Frontend API notes: [docs/frontend/FRONTEND_API.md](docs/frontend/FRONTEND_API.md)
+- 🛠️ Backend worklist: [docs/backend/BACKEND_TODO.md](docs/backend/BACKEND_TODO.md)
+- 🗂️ Historical architecture notes: [docs/architecture/agent.md](docs/architecture/agent.md)
 
 ## Quick Start
 
-### Install Python dependencies
+### 1. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Run the desktop client
+### 2. Run the desktop client
 
 Windows:
 
@@ -100,7 +98,7 @@ Cross-platform:
 python -m src.app.main
 ```
 
-### Run the backend
+### 3. Run the backend
 
 ```bash
 python -m backend.app.main
@@ -113,7 +111,7 @@ Optional environment variables:
 - `SSHFERRY_ALLOWED_ORIGINS`
 - `SSHFERRY_LOCAL_TOKEN`
 
-### Run the frontend
+### 4. Run the frontend
 
 ```bash
 cd frontend
@@ -129,21 +127,21 @@ npm install
 npm run build
 ```
 
-## Desktop Usage
+## Desktop Workflow
 
-1. Add a site manually or paste an SSH command.
-2. Set `remote_root` to a dedicated directory when possible.
-3. Run the connection check.
-4. Open one or more remote sessions.
-5. Upload or download files and folders.
-6. Drag between remote panels to create remote-to-remote tasks.
-7. Watch and control work in the task center.
+1. ➕ Add a site manually or import from an SSH command.
+2. 🧭 Set `remote_root` to a dedicated directory when possible.
+3. 🧪 Run the connection check.
+4. 🪟 Open one or more remote sessions.
+5. ⬆️⬇️ Upload or download files and folders.
+6. 🔀 Drag between remote panels for remote-to-remote transfer.
+7. 📊 Track and control progress in the task center.
 
 Notes:
 
-- Site-level default protocol can be `sftp` or `scp`
-- Main window task override can force `Auto / SFTP / SCP`
-- If `remote_root` is empty, it defaults to `/`
+- Site default protocol can be `sftp` or `scp`
+- Window-level override can force `Auto / SFTP / SCP`
+- Empty `remote_root` falls back to `/`
 
 ## Verification
 
@@ -159,9 +157,9 @@ Quick import check:
 python -c "from src.shared.models import SiteConfig, Task; from src.core.scheduler import TaskScheduler; from src.services.connection_checker import ConnectionChecker; print('imports_ok')"
 ```
 
-## Packaging The Desktop App
+## Packaging
 
-Windows packaging is still aimed at the PySide6 desktop client.
+Windows packaging currently targets the PySide6 desktop client.
 
 Build:
 
@@ -197,21 +195,22 @@ release/SSHFerry-<version>-windows.sha256
 
 Important notes:
 
-- Publish the whole folder or the generated `.zip`, not only the `.exe`
-- The build uses `onedir` layout for Qt runtime stability
-- UPX is disabled by default
+- 📦 Publish the whole folder or generated `.zip`, not only the `.exe`
+- 🧱 The build uses `onedir` layout for Qt runtime stability
+- 🚫 UPX is disabled by default
 
 ## Performance Notes
 
-- Large files switch to parallel SFTP automatically once the threshold is reached
-- Default preset policy is direction-aware:
-  - upload: `medium`
-  - download: `high`
-- Default scheduler concurrency:
-  - `max_workers_total=3`
-  - `max_workers_sftp=3`
-  - `max_workers_scp=2`
-  - `max_workers_parallel=1`
+- ⚡ Large files switch to parallel SFTP automatically after the threshold is reached
+- 🎛️ Default preset policy is direction-aware
+- 🧵 Scheduler concurrency is tuned by engine type
+
+Default scheduler concurrency:
+
+- `max_workers_total=3`
+- `max_workers_sftp=3`
+- `max_workers_scp=2`
+- `max_workers_parallel=1`
 
 Useful environment variables:
 
@@ -230,19 +229,19 @@ python tools/benchmark_transfer.py --site "<your-site-name>" --size-mb 512 --ite
 
 ## Storage And Safety
 
-- Passwords are not persisted by default
-- If `Save password to sites.json` is enabled for a password site, the password is stored locally on this machine
-- Site store path:
-  - Windows: `%USERPROFILE%\AppData\Local\SSHFerry\sites.json`
-  - Linux / macOS: `~/.config/sshferry/sites.json`
-- For safer operation, prefer least-privilege accounts and a non-root `remote_root`
+- 🔐 Passwords are not persisted by default
+- 💾 If password saving is enabled, credentials are stored locally on the current machine
+- 🧱 Prefer least-privilege accounts and a non-root `remote_root`
+
+Site store path:
+
+- Windows: `%USERPROFILE%\AppData\Local\SSHFerry\sites.json`
+- Linux / macOS: `~/.config/sshferry/sites.json`
 
 ## Current Status
 
-The project is in a transition phase:
+- ✅ The PySide6 desktop app is usable and remains the main entry point
+- 🔌 The FastAPI backend is already wired into the core transfer logic
+- 🚧 The React frontend is present and under active integration
 
-- The PySide6 desktop app is usable and still the main runnable product
-- The FastAPI backend is already connected to the core transfer logic
-- The React frontend is present and under active integration
-
-If you are starting product work today, treat the desktop app as the stable entry point and the backend/frontend split as the next architecture being built out.
+If you are starting work with the project today, treat the desktop client as the stable path and the backend/frontend split as the next architecture being built out.
