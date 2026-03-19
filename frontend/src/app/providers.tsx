@@ -4,7 +4,7 @@ import { RouterProvider } from 'react-router-dom';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { ToastViewport } from '../components/common/ToastViewport';
 import { useAuthBootstrap } from '../hooks/useBackendSession';
-import { useLogSocket } from '../hooks/useLogSocket';
+import { useActivitySocket } from '../hooks/useActivitySocket';
 import { useTaskSocket } from '../hooks/useTaskSocket';
 import { useWorkspaceBootstrap } from '../hooks/useWorkspaceBootstrap';
 import { I18nProvider } from '../i18n';
@@ -26,7 +26,7 @@ function AppRuntime() {
   useAuthBootstrap();
   useWorkspaceBootstrap();
   useTaskSocket();
-  useLogSocket();
+  useActivitySocket();
   return null;
 }
 

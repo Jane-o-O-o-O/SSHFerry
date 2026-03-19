@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends
 
 from backend.app.api.deps import require_authenticated_request
+from backend.app.api.routes.activity import router as activity_router
 from backend.app.api.routes.auth import router as auth_router
 from backend.app.api.routes.connections import router as connections_router
 from backend.app.api.routes.health import router as health_router
@@ -23,6 +24,7 @@ protected_router = APIRouter(dependencies=[Depends(require_authenticated_request
 protected_router.include_router(sites_router)
 protected_router.include_router(connections_router)
 protected_router.include_router(local_files_router)
+protected_router.include_router(activity_router)
 protected_router.include_router(workspace_router)
 protected_router.include_router(remote_files_router)
 protected_router.include_router(tasks_router)

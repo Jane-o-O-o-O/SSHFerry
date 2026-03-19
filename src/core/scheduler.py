@@ -3,6 +3,7 @@ from collections import defaultdict
 from dataclasses import replace
 import logging
 import os
+from pathlib import Path, PurePosixPath
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -35,6 +36,8 @@ class TaskScheduler:
         parallel_download_preset: str = "high",
         parallel_threshold: int = DEFAULT_PARALLEL_THRESHOLD_BYTES,
         logger: Optional[logging.Logger] = None,
+        activity_service=None,
+        workspace_root: str | os.PathLike[str] | None = None,
     ):
         self.site_config = site_config
         self.max_workers = max_workers
@@ -46,6 +49,8 @@ class TaskScheduler:
         self.parallel_download_preset = parallel_download_preset or parallel_preset
         self.parallel_threshold = parallel_threshold
         self.logger = logger or logging.getLogger(__name__)
+        self.activity_service = activity_service
+        self.workspace_root = Path(workspace_root).expanduser().resolve(strict=False) if workspace_root is not None else None
 
         self.tasks: Dict[str, Task] = {}
         self.task_lock = Lock()
@@ -355,6 +360,7 @@ class TaskScheduler:
                 bytes_done=task.bytes_done,
                 bytes_total=task.bytes_total,
             )
+            self._publish_task_activity(task)
         except SSHFerryError as exc:
             with self.task_lock:
                 self._set_task_status_locked(task, "failed")
@@ -373,6 +379,7 @@ class TaskScheduler:
                 error_code=exc.code,
                 message=exc.message,
             )
+            self._publish_task_activity(task)
         except Exception as exc:
             with self.task_lock:
                 self._set_task_status_locked(task, "failed")
@@ -391,6 +398,61 @@ class TaskScheduler:
                 error_code=ErrorCode.UNKNOWN_ERROR,
                 message=str(exc),
             )
+            self._publish_task_activity(task)
+
+    def _publish_task_activity(self, task: Task) -> None:
+        if self.activity_service is None:
+            return
+
+        title_map = {
+            "done": "Transfer completed",
+            "failed": "Transfer failed",
+            "canceled": "Transfer canceled",
+            "paused": "Transfer paused",
+            "skipped": "Transfer skipped",
+        }
+        level_map = {
+            "done": "success",
+            "failed": "error",
+            "canceled": "warning",
+            "paused": "warning",
+            "skipped": "info",
+        }
+        if task.status not in title_map:
+            return
+
+        src_label = self._present_activity_label(task.src_endpoint_type, task.src, task.src_endpoint.label)
+        dst_label = self._present_activity_label(task.dst_endpoint_type, task.dst, task.dst_endpoint.label)
+        if task.kind in ("file_transfer", "folder_transfer", "rename") and task.src and task.dst:
+            message = f"{src_label} -> {dst_label}"
+        else:
+            message = dst_label if task.dst else src_label
+        if task.status == "failed" and task.error_message:
+            message = f"{message}: {task.error_message}"
+
+        self.activity_service.publish(
+            user_id=task.owner_user_id,
+            level=level_map[task.status],
+            category='task',
+            action=task.status,
+            title=title_map[task.status],
+            message=message,
+        )
+
+    def _present_activity_label(self, endpoint_type: str, path: str, fallback_label: str) -> str:
+        if endpoint_type != "local" or self.workspace_root is None:
+            return fallback_label
+
+        try:
+            actual_path = Path(path).expanduser().resolve(strict=False)
+            relative = actual_path.relative_to(self.workspace_root)
+        except Exception:
+            return fallback_label
+
+        parts = relative.parts
+        workspace_parts = parts[1:] if len(parts) > 1 else ()
+        virtual_path = "/" if not workspace_parts else "/" + PurePosixPath(*workspace_parts).as_posix().lstrip("/")
+        return f"workspace:{virtual_path}"
 
     def _record_failed_metrics(self, task: Task) -> None:
         if task.kind not in ("file_transfer", "folder_transfer"):

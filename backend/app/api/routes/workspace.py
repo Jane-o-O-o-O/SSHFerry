@@ -48,12 +48,21 @@ def upload_workspace_items(
     app_state: AppState = Depends(get_app_state),
 ) -> WorkspaceUploadResponse:
     service = WorkspaceService(app_state.runtime_settings.workspace_root)
-    return service.save_uploads(
+    response = service.save_uploads(
         user_id=context.user.user_id,
         files=files,
         target_path=target_path,
         relative_paths=relative_paths,
     )
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='success',
+        category='workspace',
+        action='upload',
+        title='Workspace upload completed',
+        message=f'{response.total} item(s) uploaded into {response.target_path}.',
+    )
+    return response
 
 
 @router.delete('/items', response_model=WorkspaceDeleteResponse)
@@ -63,4 +72,13 @@ def delete_workspace_items(
     app_state: AppState = Depends(get_app_state),
 ) -> WorkspaceDeleteResponse:
     service = WorkspaceService(app_state.runtime_settings.workspace_root)
-    return service.delete_paths(context.user.user_id, payload.paths)
+    response = service.delete_paths(context.user.user_id, payload.paths)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='warning',
+        category='workspace',
+        action='delete',
+        title='Workspace items deleted',
+        message=f'{response.total} item(s) removed from the workspace.',
+    )
+    return response

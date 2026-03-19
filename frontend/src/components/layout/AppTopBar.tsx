@@ -2,8 +2,8 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { logout } from '../../api/auth';
 import { useI18n } from '../../i18n';
+import { useActivityStore } from '../../store/activity';
 import { useAuthStore } from '../../store/auth';
-import { useTasksStore } from '../../store/tasks';
 import { useUiStore } from '../../store/ui';
 import { StatusBadge } from '../common/StatusBadge';
 
@@ -26,7 +26,7 @@ export function AppTopBar() {
   const health = useAuthStore((state) => state.health);
   const user = useAuthStore((state) => state.user);
   const markUnauthenticated = useAuthStore((state) => state.markUnauthenticated);
-  const socketStatus = useTasksStore((state) => state.socketStatus);
+  const socketStatus = useActivityStore((state) => state.socketStatus);
   const protocolOverride = useUiStore((state) => state.protocolOverride);
   const { formatProtocol, formatSocketStatus, language, setLanguage, t } = useI18n();
 
@@ -43,6 +43,8 @@ export function AppTopBar() {
     }
   }
 
+  const isOwner = user?.role === 'owner';
+
   return (
     <header className="topbar">
       <div className="topbar-brand">
@@ -57,7 +59,7 @@ export function AppTopBar() {
           </StatusBadge>
         </div>
         <div className="topbar-status-item">
-          <span>{t('topbar.taskChannel')}</span>
+          <span>{t('topbar.activityChannel')}</span>
           <StatusBadge tone={getSocketTone(socketStatus)}>{formatSocketStatus(socketStatus)}</StatusBadge>
         </div>
         <div className="topbar-status-item">
@@ -96,8 +98,13 @@ export function AppTopBar() {
             {t('nav.tasks')}
           </Link>
           <Link className={location.pathname === '/logs' ? 'nav-link active' : 'nav-link'} to="/logs">
-            {t('nav.logs')}
+            {t('nav.activity')}
           </Link>
+          {isOwner ? (
+            <Link className={location.pathname === '/debug/logs' ? 'nav-link active' : 'nav-link'} to="/debug/logs">
+              {t('nav.debugLogs')}
+            </Link>
+          ) : null}
         </nav>
         {health?.runtime_mode === 'deployed-web' ? (
           <button type="button" className="ghost-button" onClick={() => void handleLogout()}>

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.api.deps import X_SSHFERRY_TOKEN
 from backend.app.main import create_app
+from backend.app.services.activity_service import ActivityService
 from backend.app.services.task_service import TaskService
 from src.shared.models import SiteConfig, Task
 
@@ -95,6 +96,7 @@ class FakeAppState:
             workspace_root=workspace_root or Path('.workspace'),
             legacy_local_token_enabled=True,
         )
+        self.activity_service = ActivityService()
 
     def start(self):
         return None
@@ -165,6 +167,7 @@ def test_upload_task_endpoint_creates_file_transfer_with_auto_engine():
                     'engine': 'auto',
                 },
             )
+            activity = client.get('/api/activity')
 
         assert response.status_code == 201
         body = response.json()
@@ -175,6 +178,8 @@ def test_upload_task_endpoint_creates_file_transfer_with_auto_engine():
         assert body['dst_session_id'] == 'session-1'
         assert body['bytes_total'] == 11
         assert body['status'] == 'pending'
+        assert activity.status_code == 200
+        assert activity.json()['items'][-1]['title'] == 'Upload queued'
 
     _run_in_temp_fs('upload_file', runner)
 

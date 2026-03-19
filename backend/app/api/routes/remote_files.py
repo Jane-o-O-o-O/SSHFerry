@@ -56,6 +56,14 @@ def mkdir_remote_path(
 ) -> Response:
     service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     service.mkdir(payload.session_id, payload.path)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='success',
+        category='remote',
+        action='mkdir',
+        title='Remote directory created',
+        message=f'{payload.session_id}:{payload.path}',
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -67,6 +75,14 @@ def rename_remote_path(
 ) -> Response:
     service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     service.rename(payload.session_id, payload.old_path, payload.new_path)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='info',
+        category='remote',
+        action='rename',
+        title='Remote path renamed',
+        message=f'{payload.old_path} -> {payload.new_path}',
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -78,4 +94,12 @@ def delete_remote_path(
 ) -> Response:
     service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     service.delete(payload.session_id, payload.path, recursive=payload.recursive)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='warning',
+        category='remote',
+        action='delete',
+        title='Remote path deleted',
+        message=f'{payload.session_id}:{payload.path}',
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

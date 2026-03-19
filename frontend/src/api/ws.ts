@@ -1,7 +1,8 @@
-import type { LogSocketMessage, TaskSocketMessage } from './types';
+import type { ActivitySocketMessage, LogSocketMessage, TaskSocketMessage } from './types';
 
 const DEFAULT_WS_URL = 'ws://127.0.0.1:18080';
 const TASK_SOCKET_PATH = '/api/ws/tasks';
+const ACTIVITY_SOCKET_PATH = '/api/ws/activity';
 const LOG_SOCKET_PATH = '/api/ws/logs';
 const DRAG_MIME = 'application/x-sshferry-transfer';
 
@@ -23,12 +24,20 @@ export function getTaskSocketUrl(): string {
   return buildSocketUrl(TASK_SOCKET_PATH);
 }
 
+export function getActivitySocketUrl(): string {
+  return buildSocketUrl(ACTIVITY_SOCKET_PATH);
+}
+
 export function getLogSocketUrl(): string {
   return buildSocketUrl(LOG_SOCKET_PATH);
 }
 
 export function parseTaskSocketMessage(raw: string): TaskSocketMessage | null {
   return parseSocketMessage<TaskSocketMessage>(raw);
+}
+
+export function parseActivitySocketMessage(raw: string): ActivitySocketMessage | null {
+  return parseSocketMessage<ActivitySocketMessage>(raw);
 }
 
 export function parseLogSocketMessage(raw: string): LogSocketMessage | null {

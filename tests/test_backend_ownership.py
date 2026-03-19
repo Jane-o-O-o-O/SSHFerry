@@ -12,6 +12,7 @@ import pytest
 
 from backend.app.api.deps import resolve_request_auth_context
 from backend.app.main import create_app
+from backend.app.services.activity_service import ActivityService
 from backend.app.services.app_state import AppState
 from backend.app.services.auth_service import AuthContext, AuthSession, AuthUser
 from backend.app.services.remote_file_service import RemoteFileService
@@ -93,6 +94,7 @@ class FakeAppState:
         self.startup_error = None
         self.site_store = None
         self.runtime_settings = SimpleNamespace(workspace_root=Path('.workspace'), legacy_local_token_enabled=True)
+        self.activity_service = ActivityService()
         self.log_service = SimpleNamespace(snapshot=lambda limit=None: SimpleNamespace(items=[], total=0, sequence=0), clear=lambda: None)
 
     def start(self):
@@ -206,6 +208,7 @@ def test_sites_are_scoped_to_current_user():
                     'default_transfer_protocol': 'sftp',
                 },
             )
+            activity = client.get('/api/activity')
 
         loaded = store.load_or_raise()
         assert listed.status_code == 200
@@ -213,6 +216,9 @@ def test_sites_are_scoped_to_current_user():
         assert listed.json()['items'][0]['name'] == 'alpha'
         assert create.status_code == 201
         assert update_other.status_code == 404
+        assert activity.status_code == 200
+        assert activity.json()['items'][-1]['category'] == 'site'
+        assert activity.json()['items'][-1]['action'] == 'created'
         created = next(site for site in loaded if site.name == 'gamma')
         assert created.owner_user_id == 'user-a'
 
@@ -314,6 +320,40 @@ def test_tasks_are_scoped_to_current_user():
     assert 'task-b' in scheduler.tasks
     assert 'task-a' not in scheduler.tasks
 
+
+
+
+def test_activity_feed_is_scoped_to_current_user(monkeypatch):
+    state = FakeAppState(scheduler=FakeScheduler())
+    state.activity_service.publish(
+        user_id='user-a',
+        level='success',
+        category='task',
+        action='done',
+        title='Transfer completed',
+        message='workspace:/a -> demo:/b',
+    )
+    state.activity_service.publish(
+        user_id='user-b',
+        level='warning',
+        category='site',
+        action='deleted',
+        title='Site deleted',
+        message='beta',
+    )
+    monkeypatch.setattr('backend.app.api.routes.ws.require_websocket_authenticated', lambda _websocket: _build_context('user-a'))
+
+    with _build_client(state, _build_context('user-a')) as client:
+        listed = client.get('/api/activity')
+        with client.websocket_connect('/api/ws/activity') as websocket:
+            message = websocket.receive_json()
+
+    assert listed.status_code == 200
+    assert listed.json()['total'] == 1
+    assert listed.json()['items'][0]['title'] == 'Transfer completed'
+    assert message['type'] == 'activity_snapshot'
+    assert message['total'] == 1
+    assert message['items'][0]['title'] == 'Transfer completed'
 
 def test_logs_are_owner_only():
     def runner(base_dir: Path):

@@ -3,8 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { closeSession } from '../../api/sessions';
 import type { TransferDragPayload } from '../../api/types';
 import { createRemoteCopyTask, createWorkspaceDownloadTask, createWorkspaceUploadTask } from '../../api/tasks';
+import { ActivityFeed } from '../../components/activity/ActivityFeed';
 import { AppTopBar } from '../../components/layout/AppTopBar';
-import { LogPlaceholder } from '../../components/logs/LogPlaceholder';
 import { RemoteWorkspace } from '../../components/remote-workspace/RemoteWorkspace';
 import { SiteEditorModal } from '../../components/sites/SiteEditorModal';
 import { SiteSidebar } from '../../components/sites/SiteSidebar';
@@ -184,7 +184,7 @@ export function WorkspacePage() {
       </section>
       <section className="workspace-bottom-grid">
         <TaskCenter />
-        <LogPlaceholder />
+        <ActivityFeed />
       </section>
       <SiteEditorModal />
     </main>

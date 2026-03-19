@@ -11,9 +11,32 @@ from backend.app.services.task_service import TaskService
 
 
 TASK_SNAPSHOT_INTERVAL_SECONDS = 0.5
+ACTIVITY_SNAPSHOT_INTERVAL_SECONDS = 0.5
 LOG_SNAPSHOT_INTERVAL_SECONDS = 0.5
+ACTIVITY_STREAM_LIMIT = 200
 LOG_STREAM_LIMIT = 400
 router = APIRouter(prefix='/ws', tags=['ws'])
+
+
+def _activity_snapshot_message(app_state, user_id: str) -> dict[str, object]:
+    snapshot = app_state.activity_service.snapshot(user_id=user_id, limit=ACTIVITY_STREAM_LIMIT)
+    return {
+        'type': 'activity_snapshot',
+        'items': [
+            {
+                'sequence': item.sequence,
+                'timestamp': item.timestamp,
+                'level': item.level,
+                'category': item.category,
+                'action': item.action,
+                'title': item.title,
+                'message': item.message,
+            }
+            for item in snapshot.items
+        ],
+        'total': snapshot.total,
+        'sequence': snapshot.sequence,
+    }
 
 
 def _log_snapshot_message(app_state) -> dict[str, object]:
@@ -65,6 +88,33 @@ async def task_updates(websocket: WebSocket) -> None:
                 last_payload = payload
 
             await asyncio.sleep(TASK_SNAPSHOT_INTERVAL_SECONDS)
+    except WebSocketDisconnect:
+        return
+
+
+@router.websocket('/activity')
+async def activity_updates(websocket: WebSocket) -> None:
+    context = require_websocket_authenticated(websocket)
+    await websocket.accept()
+    app_state = websocket.app.state.app_state
+    last_payload = ''
+
+    try:
+        while True:
+            try:
+                message = _activity_snapshot_message(app_state, context.user.user_id)
+            except Exception as exc:
+                message = {
+                    'type': 'error',
+                    'detail': str(exc),
+                }
+
+            payload = json.dumps(message, sort_keys=True, separators=(',', ':'))
+            if payload != last_payload:
+                await websocket.send_json(message)
+                last_payload = payload
+
+            await asyncio.sleep(ACTIVITY_SNAPSHOT_INTERVAL_SECONDS)
     except WebSocketDisconnect:
         return
 

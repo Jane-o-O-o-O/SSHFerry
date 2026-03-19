@@ -34,6 +34,14 @@ def login(payload: AuthLoginRequest, request: Request, app_state: AppState = Dep
         client_ip=request.client.host if request.client else None,
         user_agent=request.headers.get('user-agent'),
     )
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='success',
+        category='auth',
+        action='login',
+        title='Signed in',
+        message=f'{context.user.display_name} signed in to SSHFerry.',
+    )
     response = JSONResponse(content=context.to_response(), status_code=status.HTTP_200_OK)
     return app_state.auth_service.attach_auth_cookies(response, tokens)
 
@@ -76,9 +84,24 @@ def refresh_session(request: Request, app_state: AppState = Depends(get_app_stat
 @router.post('/logout', status_code=status.HTTP_204_NO_CONTENT)
 def logout(request: Request, app_state: AppState = Depends(get_app_state)) -> Response:
     """Revoke the current session and clear auth cookies."""
-    refresh_token = app_state.auth_service.get_refresh_cookie(request.cookies)
     access_token = app_state.auth_service.get_access_cookie(request.cookies)
+    refresh_token = app_state.auth_service.get_refresh_cookie(request.cookies)
+    current_context: AuthContext | None = None
+    if access_token:
+        try:
+            current_context = app_state.auth_service.authenticate_access_token(access_token)
+        except HTTPException:
+            current_context = None
     app_state.auth_service.logout(refresh_token=refresh_token, access_token=access_token)
+    if current_context is not None:
+        app_state.activity_service.publish(
+            user_id=current_context.user.user_id,
+            level='info',
+            category='auth',
+            action='logout',
+            title='Signed out',
+            message='The current session was closed.',
+        )
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     return app_state.auth_service.clear_auth_cookies(response)
 

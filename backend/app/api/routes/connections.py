@@ -27,7 +27,17 @@ def check_connection(
     app_state: AppState = Depends(get_app_state),
 ) -> ConnectionCheckResponse:
     service = ConnectionService(app_state.site_store, app_state.remote_sessions, context.user.user_id, app_state.session_lock)
-    return service.run_check(payload)
+    response = service.run_check(payload)
+    passed_count = sum(1 for item in response.results if item.passed)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='success' if response.all_passed else 'warning',
+        category='session',
+        action='checked',
+        title='Connection check completed',
+        message=f'{response.site_name}: {passed_count}/{len(response.results)} checks passed.',
+    )
+    return response
 
 
 @router.get('/sessions', response_model=SessionListResponse)
@@ -47,7 +57,16 @@ def open_session(
     app_state: AppState = Depends(get_app_state),
 ) -> SessionResponse:
     service = ConnectionService(app_state.site_store, app_state.remote_sessions, context.user.user_id, app_state.session_lock)
-    return service.open_session(payload)
+    response = service.open_session(payload)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='success',
+        category='session',
+        action='opened',
+        title='Remote session opened',
+        message=f'{response.site_name} -> {response.session_id}',
+    )
+    return response
 
 
 @router.post('/sessions/close', status_code=status.HTTP_204_NO_CONTENT)
@@ -58,4 +77,12 @@ def close_session(
 ) -> Response:
     service = ConnectionService(app_state.site_store, app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     service.close_session(payload.session_id)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='info',
+        category='session',
+        action='closed',
+        title='Remote session closed',
+        message=f'Session {payload.session_id} was closed.',
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

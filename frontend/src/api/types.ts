@@ -270,6 +270,31 @@ export interface LogSnapshotMessage {
 
 export type LogSocketMessage = LogSnapshotMessage | TaskSocketErrorMessage;
 
+export interface ActivityItem {
+  sequence: number;
+  timestamp: number;
+  level: string;
+  category: string;
+  action: string;
+  title: string;
+  message: string;
+}
+
+export interface ActivityListResponse {
+  items: ActivityItem[];
+  total: number;
+  sequence: number;
+}
+
+export interface ActivitySnapshotMessage {
+  type: 'activity_snapshot';
+  items: ActivityItem[];
+  total: number;
+  sequence: number;
+}
+
+export type ActivitySocketMessage = ActivitySnapshotMessage | TaskSocketErrorMessage;
+
 export interface ApiListResponse<T> {
   items: T[];
   total: number;

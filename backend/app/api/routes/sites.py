@@ -31,6 +31,14 @@ def create_site(
 ) -> SiteResponse:
     service = SiteService(app_state.site_store, context.user.user_id)
     site = service.create_site(payload)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='success',
+        category='site',
+        action='created',
+        title='Site created',
+        message=f'{site.name} ({site.username}@{site.host}:{site.port})',
+    )
     return service.to_response(site)
 
 
@@ -43,6 +51,14 @@ def update_site(
 ) -> SiteResponse:
     service = SiteService(app_state.site_store, context.user.user_id)
     site = service.update_site(site_name, payload)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='info',
+        category='site',
+        action='updated',
+        title='Site updated',
+        message=f'{site.name} ({site.username}@{site.host}:{site.port})',
+    )
     return service.to_response(site)
 
 
@@ -62,4 +78,12 @@ def delete_site(
         ]
         for session_id in expired_sessions:
             app_state.remote_sessions.pop(session_id, None)
+    app_state.activity_service.publish(
+        user_id=context.user.user_id,
+        level='warning',
+        category='site',
+        action='deleted',
+        title='Site deleted',
+        message=f'{site_name}; closed {len(expired_sessions)} related session(s).',
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

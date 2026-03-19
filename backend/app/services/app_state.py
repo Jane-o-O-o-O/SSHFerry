@@ -10,6 +10,7 @@ from threading import RLock
 from typing import TYPE_CHECKING
 
 from backend.app.config import RuntimeSettings, build_runtime_settings
+from backend.app.services.activity_service import ActivityService
 from backend.app.services.auth_service import AuthService
 from backend.app.services.log_service import LogService
 from src.services.site_store import SiteStore
@@ -47,6 +48,7 @@ class AppState:
     logger: logging.Logger = field(default_factory=lambda: setup_logger('sshferry.backend'))
     runtime_settings: RuntimeSettings = field(default_factory=build_runtime_settings)
     site_store: SiteStore = field(default_factory=_build_site_store)
+    activity_service: ActivityService = field(init=False)
     log_service: LogService = field(init=False)
     auth_service: AuthService = field(init=False)
     scheduler: TaskScheduler | None = field(init=False, default=None)
@@ -56,6 +58,7 @@ class AppState:
     startup_error: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
+        self.activity_service = ActivityService()
         self.log_service = LogService()
         self.auth_service = AuthService(settings=self.runtime_settings, logger=self.logger)
         self.log_service.attach_logger(self.logger)
@@ -94,7 +97,11 @@ class AppState:
         try:
             from src.core.scheduler import TaskScheduler
 
-            self.scheduler = TaskScheduler(logger=self.logger)
+            self.scheduler = TaskScheduler(
+                logger=self.logger,
+                activity_service=self.activity_service,
+                workspace_root=self.runtime_settings.workspace_root,
+            )
             self.scheduler.start()
         except Exception as exc:
             self.scheduler = None
@@ -111,6 +118,7 @@ class AppState:
             self.scheduler.stop()
         self.auth_service.stop()
         self.logger.info('Backend app state stopped')
+        self.activity_service.close()
         self.log_service.close()
 
     def require_scheduler(self) -> TaskScheduler:
