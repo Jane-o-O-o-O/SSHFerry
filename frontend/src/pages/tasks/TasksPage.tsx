@@ -14,7 +14,7 @@ export function TasksPage() {
   return (
     <main className="app-shell">
       <AppTopBar />
-      <section className="content-page-shell">
+      <section className="content-page-shell tasks-page-shell">
         <TaskCenter fullPage />
       </section>
     </main>

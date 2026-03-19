@@ -431,6 +431,82 @@ a {
   flex-wrap: wrap;
 }
 
+.local-panel-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.local-panel-header-copy {
+  min-width: 0;
+}
+
+.local-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+}
+
+.local-panel-nav-button {
+  min-width: 48px;
+}
+
+.local-panel-upload-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.local-panel-upload-menu[open] {
+  z-index: 2;
+}
+
+.local-panel-upload-trigger {
+  min-width: 0;
+  white-space: nowrap;
+  list-style: none;
+}
+
+.local-panel-upload-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.local-panel-upload-trigger::after {
+  content: ' v';
+  font-size: 11px;
+}
+
+.local-panel-upload-sheet {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  gap: 4px;
+  min-width: 100%;
+  padding: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.local-panel-upload-option {
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+}
+
+.local-panel-upload-option:hover {
+  background: var(--bg-subtle);
+}
+
 .sidebar-action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -651,6 +727,11 @@ a {
 
 .modal-body {
   padding: 20px 22px;
+}
+
+.confirm-copy {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .modal-footer {
@@ -908,6 +989,7 @@ a {
     flex: initial;
   }
 
+
   .sidebar-shell {
     position: static;
   }
@@ -933,6 +1015,28 @@ a {
   .task-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .local-panel-header {
+    display: flex;
+  }
+
+  .local-panel-actions {
+    width: 100%;
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
+
+  .local-panel-actions .ghost-button,
+  .local-panel-upload-menu,
+  .local-panel-upload-trigger {
+    width: 100%;
+  }
+
+  .local-panel-upload-sheet {
+    left: 0;
+    right: auto;
+    min-width: 100%;
   }
 }
 
@@ -1181,6 +1285,22 @@ a {
     padding: 16px;
   }
 }
+.tasks-page-shell {
+  display: flex;
+  justify-content: center;
+}
+
+.tasks-page-shell .task-center-full {
+  width: 100%;
+  max-width: 100%;
+}
+
+@media (min-width: 1180px) {
+  .tasks-page-shell .task-center-full {
+    max-width: min(1240px, 66.666vw);
+  }
+}
+
 .logs-page-shell {
   display: flex;
   justify-content: center;
@@ -1323,4 +1443,17 @@ a {
   .activity-page-shell .activity-feed-full {
     max-width: min(1240px, 66.666vw);
   }
+}
+
+.bootstrap-panel-toolbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.locale-switch-compact {
+  margin-left: auto;
 }

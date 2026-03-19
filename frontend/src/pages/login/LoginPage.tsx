@@ -14,7 +14,7 @@ export function LoginPage() {
   const authNotice = useAuthStore((state) => state.authNotice);
   const setAuthenticated = useAuthStore((state) => state.setAuthenticated);
   const clearAuthNotice = useAuthStore((state) => state.clearAuthNotice);
-  const { t } = useI18n();
+  const { language, setLanguage, t } = useI18n();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -52,7 +52,25 @@ export function LoginPage() {
   return (
     <main className="bootstrap-page login-page">
       <section className="bootstrap-panel login-panel">
-        <div className="eyebrow">{t('brand.frontend')}</div>
+        <div className="bootstrap-panel-toolbar">
+          <div className="eyebrow">{t('brand.frontend')}</div>
+          <div className="locale-switch locale-switch-compact" role="group" aria-label={t('topbar.language')}>
+            <button
+              type="button"
+              className={`locale-button ${language === 'zh' ? 'is-active' : ''}`}
+              onClick={() => setLanguage('zh')}
+            >
+              {t('language.zh')}
+            </button>
+            <button
+              type="button"
+              className={`locale-button ${language === 'en' ? 'is-active' : ''}`}
+              onClick={() => setLanguage('en')}
+            >
+              {t('language.en')}
+            </button>
+          </div>
+        </div>
         <h1>{t('login.title')}</h1>
         <p>{t('login.description')}</p>
         {authNotice ? <div className="login-notice">{authNotice}</div> : null}
@@ -89,4 +107,3 @@ export function LoginPage() {
     </main>
   );
 }
-

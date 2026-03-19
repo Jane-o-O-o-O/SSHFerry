@@ -19,6 +19,7 @@ type BrowserFile = File & { webkitRelativePath?: string };
 export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadMenuRef = useRef<HTMLDetailsElement | null>(null);
   const localCurrentPath = useWorkspaceStore((state) => state.localCurrentPath);
   const localPathDraft = useWorkspaceStore((state) => state.localPathDraft);
   const localSelection = useWorkspaceStore((state) => state.localSelection);
@@ -65,6 +66,12 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
 
   async function refreshWorkspace() {
     await Promise.all([listingQuery.refetch(), statsQuery.refetch()]);
+  }
+
+  function closeUploadMenu() {
+    if (uploadMenuRef.current) {
+      uploadMenuRef.current.open = false;
+    }
   }
 
   async function handleUploadSelection(files: FileList | null) {
@@ -114,16 +121,16 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
 
   return (
     <section className="panel-shell local-panel">
-      <header className="panel-header">
-        <div>
+      <header className="panel-header local-panel-header">
+        <div className="local-panel-header-copy">
           <h3>{t('localPanel.title')}</h3>
           <p>{t('localPanel.description')}</p>
           {summary ? <p className="mono-cell">{summary}</p> : null}
         </div>
-        <div className="panel-actions wrap-actions">
+        <div className="local-panel-actions">
           <button
             type="button"
-            className="ghost-button"
+            className="ghost-button local-panel-nav-button"
             onClick={() => {
               if (listingQuery.data?.parent_path) {
                 setLocalPath(listingQuery.data.parent_path);
@@ -133,15 +140,31 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
           >
             ..
           </button>
-          <button type="button" className="ghost-button" onClick={() => void refreshWorkspace()}>
-            {t('common.refresh')}
-          </button>
-          <button type="button" className="ghost-button" onClick={() => fileInputRef.current?.click()}>
-            {t('localPanel.uploadFiles')}
-          </button>
-          <button type="button" className="ghost-button" onClick={() => folderInputRef.current?.click()}>
-            {t('localPanel.uploadFolder')}
-          </button>
+          <details ref={uploadMenuRef} className="local-panel-upload-menu">
+            <summary className="ghost-button local-panel-upload-trigger">{t('localPanel.uploadAction')}</summary>
+            <div className="local-panel-upload-sheet">
+              <button
+                type="button"
+                className="local-panel-upload-option"
+                onClick={() => {
+                  closeUploadMenu();
+                  fileInputRef.current?.click();
+                }}
+              >
+                {t('localPanel.uploadFiles')}
+              </button>
+              <button
+                type="button"
+                className="local-panel-upload-option"
+                onClick={() => {
+                  closeUploadMenu();
+                  folderInputRef.current?.click();
+                }}
+              >
+                {t('localPanel.uploadFolder')}
+              </button>
+            </div>
+          </details>
           <button
             type="button"
             className="ghost-button danger-text"
