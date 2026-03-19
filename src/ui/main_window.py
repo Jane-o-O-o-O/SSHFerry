@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -230,6 +231,7 @@ class MainWindow(QMainWindow):
         self.btn_add_site.setIcon(self.style().standardIcon(QStyle.SP_FileDialogNewFolder))
         self.btn_add_site.setToolTip("Add Site")
         self.btn_add_site.clicked.connect(self._add_site)
+        self._configure_site_icon_button(self.btn_add_site)
         site_actions_layout.addWidget(self.btn_add_site)
 
         self.btn_edit_site = QPushButton()
@@ -237,6 +239,7 @@ class MainWindow(QMainWindow):
         self.btn_edit_site.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
         self.btn_edit_site.setToolTip("Edit Site")
         self.btn_edit_site.clicked.connect(self._edit_site)
+        self._configure_site_icon_button(self.btn_edit_site)
         site_actions_layout.addWidget(self.btn_edit_site)
 
         self.btn_check_connection = QPushButton()
@@ -244,6 +247,7 @@ class MainWindow(QMainWindow):
         self.btn_check_connection.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
         self.btn_check_connection.setToolTip("Check Connection")
         self.btn_check_connection.clicked.connect(self._check_connection)
+        self._configure_site_icon_button(self.btn_check_connection)
         site_actions_layout.addWidget(self.btn_check_connection)
 
         self.btn_remove_site = QPushButton()
@@ -252,6 +256,7 @@ class MainWindow(QMainWindow):
         self.btn_remove_site.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
         self.btn_remove_site.setToolTip("Remove Site")
         self.btn_remove_site.clicked.connect(self._remove_site)
+        self._configure_site_icon_button(self.btn_remove_site)
         site_actions_layout.addWidget(self.btn_remove_site)
 
         site_actions_layout.addStretch()
@@ -508,6 +513,11 @@ class MainWindow(QMainWindow):
             return selected_ids
         current = self._current_session()
         return [current.session_id] if current else []
+
+    @staticmethod
+    def _configure_site_icon_button(button: QPushButton) -> None:
+        button.setFixedSize(40, 40)
+        button.setIconSize(QSize(24, 24))
 
     def _add_site(self):
         dlg = SiteEditorDialog(parent=self)
