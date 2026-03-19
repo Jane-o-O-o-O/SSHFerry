@@ -6,6 +6,8 @@ from typing import List, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -154,6 +156,7 @@ class RemoteSession:
     panel: RemotePanel
     container: QWidget
     status_label: QLabel
+    selected_box: QCheckBox
     selector: QComboBox
     connected: bool = False
 
@@ -208,6 +211,8 @@ class MainWindow(QMainWindow):
         sites_title.setObjectName("sectionTitle")
         left_lay.addWidget(sites_title)
         self.site_list = QListWidget()
+        self.site_list.setObjectName("siteList")
+        self.site_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.site_list.itemClicked.connect(self._on_site_selected)
         self.site_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.site_list.customContextMenuRequested.connect(self._show_site_context_menu)
@@ -259,7 +264,7 @@ class MainWindow(QMainWindow):
 
         self.btn_remove_session = QPushButton("Disconnect")
         self.btn_remove_session.setProperty("variant", "danger")
-        self.btn_remove_session.clicked.connect(self._remove_current_session)
+        self.btn_remove_session.clicked.connect(self._remove_selected_sessions)
         left_lay.addWidget(self.btn_remove_session)
 
         protocol_label = QLabel("Task Protocol Override")
@@ -482,6 +487,28 @@ class MainWindow(QMainWindow):
             return self.sites[idx]
         return None
 
+    def _selected_sites(self) -> list[SiteConfig]:
+        selected_sites: list[SiteConfig] = []
+        for item in self.site_list.selectedItems():
+            idx = self.site_list.row(item)
+            if 0 <= idx < len(self.sites):
+                selected_sites.append(self.sites[idx])
+        if selected_sites:
+            return selected_sites
+        current = self._selected_site()
+        return [current] if current else []
+
+    def _selected_session_ids(self) -> list[str]:
+        selected_ids = [
+            session_id
+            for session_id, session in self.sessions.items()
+            if session.selected_box.isChecked()
+        ]
+        if selected_ids:
+            return selected_ids
+        current = self._current_session()
+        return [current.session_id] if current else []
+
     def _add_site(self):
         dlg = SiteEditorDialog(parent=self)
         dlg.site_saved.connect(self._on_site_saved)
@@ -561,13 +588,22 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Connection Check", "\n".join(lines))
 
     def _create_session_from_selection(self):
-        site = self._selected_site()
-        if not site:
+        sites = self._selected_sites()
+        if not sites:
             QMessageBox.warning(self, "No Site Selected", "Select a site first.")
             return
-        self._create_session(site)
+        for site in sites:
+            matching_sessions = [
+                session for session in self.sessions.values() if session.site.name == site.name
+            ]
+            if matching_sessions:
+                for session in matching_sessions:
+                    self._refresh_or_reconnect_session(session.session_id)
+                continue
+            session_id = self._create_session(site)
+            self._connect_session(session_id)
 
-    def _create_session(self, site: SiteConfig):
+    def _create_session(self, site: SiteConfig) -> str:
         session_id = str(uuid.uuid4())
         container = QFrame()
         container.setObjectName("sessionCard")
@@ -579,24 +615,24 @@ class MainWindow(QMainWindow):
 
         header = QHBoxLayout()
         header.setSpacing(TOKENS.spacing_sm)
+        selected_box = QCheckBox()
+        selected_box.setToolTip("Select this session for batch disconnect")
+        selected_box.stateChanged.connect(lambda _state, sid=session_id: self._update_site_action_buttons())
         session_label = QLabel(site.name)
         session_label.setObjectName("sectionTitle")
         selector = QComboBox()
         self._populate_site_selector(selector, site.name)
         status_label = QLabel("Disconnected")
         status_label.setObjectName("mutedLabel")
-        btn_connect = QPushButton("Connect")
-        btn_connect.setProperty("variant", "primary")
-        btn_connect.clicked.connect(lambda: self._activate_and_run(session_id, self._connect_session))
         btn_refresh = QPushButton("Refresh")
         btn_refresh.setProperty("variant", "ghost")
-        btn_refresh.clicked.connect(lambda: self._activate_and_run(session_id, self._remote_refresh))
+        btn_refresh.clicked.connect(lambda: self._activate_and_run(session_id, self._refresh_or_reconnect_session))
         btn_close = QPushButton("Close")
         btn_close.setProperty("variant", "danger")
         btn_close.clicked.connect(lambda: self._close_session(session_id))
+        header.addWidget(selected_box)
         header.addWidget(session_label)
         header.addWidget(selector, 1)
-        header.addWidget(btn_connect)
         header.addWidget(btn_refresh)
         header.addWidget(btn_close)
         header.addWidget(status_label)
@@ -607,7 +643,7 @@ class MainWindow(QMainWindow):
         panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(panel, 1)
 
-        session = RemoteSession(session_id, site, panel, container, status_label, selector)
+        session = RemoteSession(session_id, site, panel, container, status_label, selected_box, selector)
         selector.currentIndexChanged.connect(lambda _idx, sid=session_id: self._switch_session_site(sid))
         panel.tree.itemPressed.connect(lambda _item, _col, sid=session_id: self._set_active_session(sid))
         panel.entry_activated.connect(lambda entry, sid=session_id: self._on_remote_entry_activated(sid, entry))
@@ -639,11 +675,12 @@ class MainWindow(QMainWindow):
         self._set_active_session(session_id)
         self._update_site_action_buttons()
         self._log(f"Opened session for {site.name}")
+        return session_id
 
-    def _remove_current_session(self):
-        session = self._current_session()
-        if session:
-            self._close_session(session.session_id)
+    def _remove_selected_sessions(self):
+        session_ids = self._selected_session_ids()
+        for session_id in list(session_ids):
+            self._close_session(session_id)
 
     def _close_session(self, session_id: str):
         session = self.sessions.get(session_id)
@@ -676,14 +713,12 @@ class MainWindow(QMainWindow):
             return
         session.site = site
         session.panel.set_session_context(session_id, site.name)
+        session.panel.set_path(site.remote_root or "/")
+        session.connected = False
         session.status_label.setText("Disconnected")
         self._set_active_session(session_id)
 
-    def _connect_session(self, session_id: str):
-        session = self.sessions.get(session_id)
-        if not session:
-            return
-        site = session.site
+    def _ensure_site_credentials(self, site: SiteConfig) -> bool:
         if site.auth_method == "password" and not site.password:
             pwd, ok = QInputDialog.getText(
                 self,
@@ -691,16 +726,32 @@ class MainWindow(QMainWindow):
                 f"Password for {site.username}@{site.host}:",
             )
             if not ok:
-                return
+                return False
             site.password = pwd
         if not site.remote_root or not site.remote_root.strip():
             site.remote_root = "/"
+        return True
+
+    def _connect_session(self, session_id: str, target_path: Optional[str] = None):
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        site = session.site
+        if not self._ensure_site_credentials(site):
+            return
         session.connected = True
         session.status_label.setText(f"Connected: {site.name}")
         session.panel.set_session_context(session_id, site.name)
-        self._list_remote_dir(session_id, site.remote_root)
+        self._list_remote_dir(session_id, target_path or site.remote_root, retry_on_failure=False)
 
-    def _list_remote_dir(self, session_id: str, path: str, parent_item: Optional[QTreeWidgetItem] = None):
+    def _list_remote_dir(
+        self,
+        session_id: str,
+        path: str,
+        parent_item: Optional[QTreeWidgetItem] = None,
+        retry_on_failure: bool = False,
+        suppress_error_dialog: bool = False,
+    ):
         session = self.sessions.get(session_id)
         if not session:
             return
@@ -708,7 +759,11 @@ class MainWindow(QMainWindow):
         thread.list_completed.connect(
             lambda remote_path, entries, item, sid=session_id: self._on_list_completed(sid, remote_path, entries, item)
         )
-        thread.list_failed.connect(lambda remote_path, msg, sid=session_id: self._on_list_failed(sid, remote_path, msg))
+        thread.list_failed.connect(
+            lambda remote_path, msg, sid=session_id, item=parent_item, retry=retry_on_failure, silent=suppress_error_dialog: self._on_list_failed(
+                sid, remote_path, msg, item, retry, silent
+            )
+        )
         self._start_thread(thread)
 
     def _on_list_completed(self, session_id: str, path: str, entries: list, parent_item: Optional[QTreeWidgetItem]):
@@ -720,14 +775,35 @@ class MainWindow(QMainWindow):
         else:
             session.panel.set_path(path)
             session.panel.set_root_entries(entries)
+        session.connected = True
+        session.status_label.setText(f"Connected: {session.site.name}")
 
-    def _on_list_failed(self, session_id: str, path: str, msg: str):
+    def _on_list_failed(
+        self,
+        session_id: str,
+        path: str,
+        msg: str,
+        parent_item: Optional[QTreeWidgetItem] = None,
+        retry_on_failure: bool = False,
+        suppress_error_dialog: bool = False,
+    ):
         session = self.sessions.get(session_id)
+        if retry_on_failure and session and self._ensure_site_credentials(session.site):
+            self._log(f"Refreshing {session.site.name} after disconnect on {path}")
+            self._list_remote_dir(
+                session_id,
+                path,
+                parent_item,
+                retry_on_failure=False,
+                suppress_error_dialog=suppress_error_dialog,
+            )
+            return
         if session:
             session.connected = False
             session.status_label.setText("Disconnected")
         self._log(f"List failed ({path}): {msg}")
-        QMessageBox.critical(self, "Error", msg)
+        if not suppress_error_dialog:
+            QMessageBox.critical(self, "Error", msg)
 
     def _on_remote_entry_activated(self, session_id: str, entry: RemoteEntry):
         session = self.sessions.get(session_id)
@@ -744,15 +820,33 @@ class MainWindow(QMainWindow):
         parent = get_remote_parent(session.panel.current_path)
         if parent:
             ensure_in_sandbox(parent, session.site.remote_root)
-            self._list_remote_dir(session_id, parent)
+            self._list_remote_dir(session_id, parent, retry_on_failure=True)
+
+    def _refresh_or_reconnect_session(self, session_id: str):
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        current_path = session.panel.current_path or session.site.remote_root or "/"
+        if not self._ensure_site_credentials(session.site):
+            return
+        session.status_label.setText(f"Refreshing: {session.site.name}")
+        self._list_remote_dir(
+            session_id,
+            current_path,
+            retry_on_failure=True,
+        )
 
     def _remote_refresh(self, session_id: str):
-        session = self.sessions.get(session_id)
-        if session:
-            self._list_remote_dir(session_id, session.panel.current_path)
+        self._refresh_or_reconnect_session(session_id)
 
     def _remote_refresh_node(self, session_id: str, path: str, item: QTreeWidgetItem):
-        self._list_remote_dir(session_id, path, item)
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        if not self._ensure_site_credentials(session.site):
+            return
+        session.status_label.setText(f"Refreshing: {session.site.name}")
+        self._list_remote_dir(session_id, path, item, retry_on_failure=True)
 
     def _remote_mkdir(self, session_id: str, name: str, parent_item: QTreeWidgetItem = None):
         session = self.sessions.get(session_id)
@@ -1096,12 +1190,12 @@ class MainWindow(QMainWindow):
         self.site_store.save(self.sites)
 
     def _update_site_action_buttons(self):
-        has_site = self._selected_site() is not None
+        has_site = bool(self._selected_sites())
         self.btn_edit_site.setEnabled(has_site)
         self.btn_remove_site.setEnabled(has_site)
         self.btn_check_connection.setEnabled(has_site)
         self.btn_new_session.setEnabled(has_site)
-        self.btn_remove_session.setEnabled(bool(self.sessions))
+        self.btn_remove_session.setEnabled(bool(self._selected_session_ids()))
         self._update_top_bar_status(self.scheduler.get_all_tasks())
 
     def _update_top_bar_status(self, tasks):

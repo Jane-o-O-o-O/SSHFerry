@@ -159,6 +159,22 @@ QListWidget::item:selected, QTreeView::item:selected, QTreeWidget::item:selected
     color: #f8fbfc;
 }}
 
+QListWidget#siteList::item {{
+    margin: 2px 4px;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: {TOKENS.radius_sm}px;
+}}
+
+QListWidget#siteList::item:selected,
+QListWidget#siteList::item:selected:active,
+QListWidget#siteList::item:selected:!active {{
+    background-color: {alpha_hex(TOKENS.accent, 0.22)};
+    color: {TOKENS.text_main};
+    border: 1px solid {TOKENS.accent};
+    font-weight: 700;
+}}
+
 QListWidget::item:hover, QTreeView::item:hover, QTreeWidget::item:hover, QTableWidget::item:hover {{
     background-color: {TOKENS.accent_soft};
 }}
