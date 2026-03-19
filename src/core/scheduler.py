@@ -20,6 +20,21 @@ from src.shared.logging_ import log_task_event
 from src.shared.models import SiteConfig, Task
 
 
+def _env_int(name: str, default: int, min_value: int) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return max(min_value, int(raw))
+    except ValueError:
+        return default
+
+
+def _env_preset(name: str, default: str) -> str:
+    raw = os.getenv(name, "").strip().lower()
+    return raw or default
+
+
 class TaskScheduler:
     """Threaded scheduler for file operations and transfer tasks."""
 
@@ -33,18 +48,38 @@ class TaskScheduler:
         parallel_preset: str = "high",
         parallel_upload_preset: str = "medium",
         parallel_download_preset: str = "high",
+        remote_relay_download_preset: str | None = None,
+        remote_relay_upload_preset: str | None = None,
         parallel_threshold: int = DEFAULT_PARALLEL_THRESHOLD_BYTES,
         logger: Optional[logging.Logger] = None,
     ):
         self.site_config = site_config
-        self.max_workers = max_workers
-        self.max_workers_sftp = max_workers_sftp
-        self.max_workers_scp = max_workers_scp
-        self.max_workers_parallel = max_workers_parallel
-        self.parallel_preset = parallel_preset
-        self.parallel_upload_preset = parallel_upload_preset or parallel_preset
-        self.parallel_download_preset = parallel_download_preset or parallel_preset
-        self.parallel_threshold = parallel_threshold
+        self.max_workers = _env_int("SSHFERRY_MAX_WORKERS_TOTAL", max_workers, 1)
+        self.max_workers_sftp = _env_int("SSHFERRY_MAX_WORKERS_SFTP", max_workers_sftp, 1)
+        self.max_workers_scp = _env_int("SSHFERRY_MAX_WORKERS_SCP", max_workers_scp, 1)
+        self.max_workers_parallel = _env_int("SSHFERRY_MAX_WORKERS_PARALLEL", max_workers_parallel, 1)
+        self.parallel_preset = _env_preset("SSHFERRY_PARALLEL_PRESET", parallel_preset)
+        self.parallel_upload_preset = _env_preset(
+            "SSHFERRY_PARALLEL_UPLOAD_PRESET",
+            parallel_upload_preset or self.parallel_preset,
+        )
+        self.parallel_download_preset = _env_preset(
+            "SSHFERRY_PARALLEL_DOWNLOAD_PRESET",
+            parallel_download_preset or self.parallel_preset,
+        )
+        self.remote_relay_download_preset = _env_preset(
+            "SSHFERRY_REMOTE_RELAY_DOWNLOAD_PRESET",
+            remote_relay_download_preset or self.parallel_download_preset,
+        )
+        self.remote_relay_upload_preset = _env_preset(
+            "SSHFERRY_REMOTE_RELAY_UPLOAD_PRESET",
+            remote_relay_upload_preset or self.parallel_upload_preset,
+        )
+        self.parallel_threshold = _env_int(
+            "SSHFERRY_PARALLEL_THRESHOLD_BYTES",
+            parallel_threshold,
+            1,
+        )
         self.logger = logger or logging.getLogger(__name__)
 
         self.tasks: Dict[str, Task] = {}
@@ -54,15 +89,15 @@ class TaskScheduler:
         self.active_task_ids: set[str] = set()
         self.active_by_protocol: dict[str, int] = defaultdict(int)
         self.protocol_limits = {
-            "sftp": max_workers_sftp,
-            "scp": max_workers_scp,
-            "parallel": max_workers_parallel,
+            "sftp": self.max_workers_sftp,
+            "scp": self.max_workers_scp,
+            "parallel": self.max_workers_parallel,
         }
         self._rr_protocols = ["sftp", "scp", "parallel"]
         self._rr_index = 0
         self._last_scheduler_stats_log = 0.0
 
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         self.futures: Dict[str, Future] = {}
         self.running = False
         self.scheduler_thread: Optional[Thread] = None
@@ -628,8 +663,8 @@ class TaskScheduler:
             dst_site,
             self.logger,
             parallel_threshold=self.parallel_threshold,
-            relay_download_preset=self.parallel_download_preset,
-            relay_upload_preset=self.parallel_upload_preset,
+            relay_download_preset=self.remote_relay_download_preset,
+            relay_upload_preset=self.remote_relay_upload_preset,
         )
         engine.transfer_file(
             task.src,
@@ -646,8 +681,8 @@ class TaskScheduler:
             dst_site,
             self.logger,
             parallel_threshold=self.parallel_threshold,
-            relay_download_preset=self.parallel_download_preset,
-            relay_upload_preset=self.parallel_upload_preset,
+            relay_download_preset=self.remote_relay_download_preset,
+            relay_upload_preset=self.remote_relay_upload_preset,
         )
         engine.transfer_dir(
             task.src,

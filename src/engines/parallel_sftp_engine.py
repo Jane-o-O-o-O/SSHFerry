@@ -58,6 +58,7 @@ class ParallelSftpEngine:
     Manages parallel file transfers using multiple persistent SFTP connections.
     """
     _host_worker_caps: dict[str, int] = {}
+    _host_success_streaks: dict[str, int] = {}
     _host_cap_lock = threading.Lock()
 
     def __init__(
@@ -122,10 +123,29 @@ class ParallelSftpEngine:
             old_cap = self._host_worker_caps.get(self.host_key, self.max_workers)
             if new_cap < old_cap:
                 self._host_worker_caps[self.host_key] = new_cap
+                self._host_success_streaks[self.host_key] = 0
                 self.logger.warning(
                     f"Adaptive parallel cap: {self.host_key} workers {old_cap} -> {new_cap}"
                 )
         return new_cap
+
+    def _record_host_success(self) -> None:
+        """Gradually restore a previously degraded host worker cap."""
+        with self._host_cap_lock:
+            current_cap = self._host_worker_caps.get(self.host_key, self.max_workers)
+            if current_cap >= self.max_workers:
+                self._host_success_streaks.pop(self.host_key, None)
+                return
+            streak = self._host_success_streaks.get(self.host_key, 0) + 1
+            if streak < 3:
+                self._host_success_streaks[self.host_key] = streak
+                return
+            new_cap = min(self.max_workers, current_cap + max(1, current_cap // 2))
+            self._host_worker_caps[self.host_key] = new_cap
+            self._host_success_streaks[self.host_key] = 0
+            self.logger.info(
+                f"Adaptive parallel cap recovered: {self.host_key} workers {current_cap} -> {new_cap}"
+            )
 
     def upload_file(
         self,
@@ -292,6 +312,7 @@ class ParallelSftpEngine:
                 )
             if bytes_transferred < file_size or completed_chunks < num_chunks:
                 raise SSHFerryError(ErrorCode.TRANSFER_FAILED, "Parallel upload failed")
+            self._record_host_success()
 
     def download_file(
         self,
@@ -453,3 +474,4 @@ class ParallelSftpEngine:
                 )
             if bytes_transferred < file_size or completed_chunks < num_chunks:
                 raise SSHFerryError(ErrorCode.TRANSFER_FAILED, "Parallel download failed")
+            self._record_host_success()
