@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/sshferry-logo.png" alt="SSHFerry logo" width="220" />
+</p>
+
 # SSHFerry
 
 [中文](README_zh.md) | English

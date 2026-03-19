@@ -1,6 +1,12 @@
+<p align="center">
+  <img src="docs/assets/sshferry-logo.png" alt="SSHFerry 标识" width="220" />
+</p>
+
 # SSHFerry
 
 中文 | [English](README.md)
+
+
 
 SSHFerry 是一个面向多会话 SSH 文件传输场景的工作区，重点关注远端操作安全、任务过程可见，以及贴近日常使用的传输体验。
 
