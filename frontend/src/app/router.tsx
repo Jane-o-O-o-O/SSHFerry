@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { OwnerRoute } from '../components/auth/OwnerRoute';
 import { ProtectedRoute } from '../components/auth/ProtectedRoute';
 import { BootstrapPage } from '../pages/bootstrap/BootstrapPage';
+import { RouteErrorPage } from '../pages/error/RouteErrorPage';
 import { LoginPage } from '../pages/login/LoginPage';
 import { LogsPage } from '../pages/logs/LogsPage';
 import { ActivityPage } from '../pages/activity/ActivityPage';
@@ -13,10 +14,12 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: <BootstrapPage />,
+    errorElement: <RouteErrorPage />,
   },
   {
     path: '/login',
     element: <LoginPage />,
+    errorElement: <RouteErrorPage />,
   },
   {
     path: '/workspace',
@@ -25,6 +28,7 @@ export const router = createBrowserRouter([
         <WorkspacePage />
       </ProtectedRoute>
     ),
+    errorElement: <RouteErrorPage />,
   },
   {
     path: '/tasks',
@@ -33,6 +37,7 @@ export const router = createBrowserRouter([
         <TasksPage />
       </ProtectedRoute>
     ),
+    errorElement: <RouteErrorPage />,
   },
   {
     path: '/logs',
@@ -41,6 +46,7 @@ export const router = createBrowserRouter([
         <ActivityPage />
       </ProtectedRoute>
     ),
+    errorElement: <RouteErrorPage />,
   },
   {
     path: '/debug/logs',
@@ -49,6 +55,7 @@ export const router = createBrowserRouter([
         <LogsPage />
       </OwnerRoute>
     ),
+    errorElement: <RouteErrorPage />,
   },
   {
     path: '*',

@@ -140,6 +140,9 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
           >
             ..
           </button>
+          <button type="button" className="ghost-button" onClick={() => void refreshWorkspace()}>
+            {t('common.refresh')}
+          </button>
           <details ref={uploadMenuRef} className="local-panel-upload-menu">
             <summary className="ghost-button local-panel-upload-trigger">{t('localPanel.uploadAction')}</summary>
             <div className="local-panel-upload-sheet">

@@ -20,6 +20,10 @@
   --danger-soft: rgba(161, 72, 63, 0.12);
   --success: #2f6e4d;
   --success-soft: rgba(47, 110, 77, 0.12);
+  --scrollbar-track: rgba(53, 63, 68, 0.08);
+  --scrollbar-thumb: rgba(47, 100, 119, 0.34);
+  --scrollbar-thumb-hover: rgba(47, 100, 119, 0.5);
+  --scrollbar-thumb-active: rgba(33, 72, 87, 0.62);
   --shadow-soft: 0 10px 30px rgba(69, 57, 40, 0.08);
   --shadow-strong: 0 18px 40px rgba(56, 46, 32, 0.12);
   --radius-lg: 18px;

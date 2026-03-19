@@ -161,7 +161,6 @@ export function WorkspacePage() {
           mode={centerPanelMode}
           centerSessionId={centerSessionId}
           onChangeMode={setCenterPanelMode}
-          onChangeSessionId={setCenterSessionId}
           onQueueLocalDownloads={handleLocalDrop}
           onCloseSession={(sessionId) => {
             void handleCloseSession(sessionId);

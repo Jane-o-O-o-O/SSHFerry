@@ -4,6 +4,40 @@
 
 html,
 body,
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+  background-clip: padding-box;
+}
+
+html,
+body,
 #root {
   min-height: 100%;
 }
@@ -372,7 +406,7 @@ a {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(250px, 280px) minmax(340px, 0.95fr) minmax(420px, 1.3fr);
+  grid-template-columns: minmax(280px, 320px) repeat(2, minmax(0, 1fr));
   gap: 18px;
   align-items: start;
 }
@@ -561,6 +595,7 @@ a {
 .sidebar-row,
 .sidebar-row-main {
   width: 100%;
+  min-width: 0;
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -594,6 +629,37 @@ a {
   border: 0;
   background: transparent;
   padding: 11px 12px;
+}
+
+.sidebar-row-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sidebar-row-title,
+.sidebar-truncate {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-details {
+  display: grid;
+  gap: 10px;
+}
+
+.sidebar-details-summary {
+  cursor: pointer;
+  margin-bottom: 0;
+}
+
+.sidebar-details-body {
+  display: grid;
+  gap: 8px;
 }
 
 .sidebar-meta,
