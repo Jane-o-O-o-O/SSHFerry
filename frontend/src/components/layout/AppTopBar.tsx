@@ -1,5 +1,6 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
+import { logout } from '../../api/auth';
 import { useI18n } from '../../i18n';
 import { useAuthStore } from '../../store/auth';
 import { useTasksStore } from '../../store/tasks';
@@ -20,11 +21,27 @@ function getSocketTone(status: string) {
 }
 
 export function AppTopBar() {
+  const navigate = useNavigate();
   const location = useLocation();
   const health = useAuthStore((state) => state.health);
+  const user = useAuthStore((state) => state.user);
+  const markUnauthenticated = useAuthStore((state) => state.markUnauthenticated);
   const socketStatus = useTasksStore((state) => state.socketStatus);
   const protocolOverride = useUiStore((state) => state.protocolOverride);
   const { formatProtocol, formatSocketStatus, language, setLanguage, t } = useI18n();
+
+  async function handleLogout() {
+    try {
+      await logout();
+    } finally {
+      markUnauthenticated(t('auth.loggedOut'));
+      if (typeof window !== 'undefined') {
+        window.location.assign('/login');
+        return;
+      }
+      navigate('/login', { replace: true });
+    }
+  }
 
   return (
     <header className="topbar">
@@ -47,6 +64,12 @@ export function AppTopBar() {
           <span>{t('topbar.protocol')}</span>
           <StatusBadge tone={protocolOverride === 'auto' ? 'neutral' : 'info'}>{formatProtocol(protocolOverride)}</StatusBadge>
         </div>
+        {user ? (
+          <div className="topbar-status-item">
+            <span>{t('topbar.user')}</span>
+            <StatusBadge tone="info">{`${user.display_name} (${user.role})`}</StatusBadge>
+          </div>
+        ) : null}
       </div>
       <div className="topbar-controls">
         <div className="locale-switch" role="group" aria-label={t('topbar.language')}>
@@ -76,6 +99,11 @@ export function AppTopBar() {
             {t('nav.logs')}
           </Link>
         </nav>
+        {health?.runtime_mode === 'deployed-web' ? (
+          <button type="button" className="ghost-button" onClick={() => void handleLogout()}>
+            {t('auth.logout')}
+          </button>
+        ) : null}
       </div>
     </header>
   );

@@ -1,45 +1,116 @@
-﻿import { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 
 import { getErrorMessage } from '../../api/http';
-import { listLocalDrives, listLocalFiles } from '../../api/localFiles';
+import { deleteWorkspaceItems, listWorkspaceItems, statWorkspacePath, uploadWorkspaceFiles } from '../../api/workspace';
 import type { TransferDragPayload } from '../../api/types';
 import { useI18n } from '../../i18n';
+import { useUiStore } from '../../store/ui';
 import { useWorkspaceStore } from '../../store/workspace';
+import { formatBytes } from '../../utils/format';
 import { FileTable } from './FileTable';
 
 interface LocalPanelProps {
   onQueueDownloads: (payload: TransferDragPayload, targetDir: string) => void | Promise<void>;
 }
 
+type BrowserFile = File & { webkitRelativePath?: string };
+
 export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const localCurrentPath = useWorkspaceStore((state) => state.localCurrentPath);
   const localPathDraft = useWorkspaceStore((state) => state.localPathDraft);
   const localSelection = useWorkspaceStore((state) => state.localSelection);
   const setLocalPath = useWorkspaceStore((state) => state.setLocalPath);
   const setLocalPathDraft = useWorkspaceStore((state) => state.setLocalPathDraft);
+  const setLocalSelection = useWorkspaceStore((state) => state.setLocalSelection);
   const toggleLocalSelection = useWorkspaceStore((state) => state.toggleLocalSelection);
+  const openConfirm = useUiStore((state) => state.openConfirm);
+  const pushToast = useUiStore((state) => state.pushToast);
   const { t } = useI18n();
 
-  const drivesQuery = useQuery({
-    queryKey: ['local-drives'],
-    queryFn: listLocalDrives,
-  });
+  const currentPath = localCurrentPath || '/';
 
   const listingQuery = useQuery({
-    queryKey: ['local-list', localCurrentPath],
-    queryFn: () => listLocalFiles(localCurrentPath),
-    enabled: Boolean(localCurrentPath),
+    queryKey: ['workspace-list', currentPath],
+    queryFn: () => listWorkspaceItems(currentPath),
   });
+
+  const statsQuery = useQuery({
+    queryKey: ['workspace-stat', currentPath],
+    queryFn: () => statWorkspacePath(currentPath),
+  });
+
+  const uploadMutation = useMutation({ mutationFn: uploadWorkspaceFiles });
+  const deleteMutation = useMutation({ mutationFn: deleteWorkspaceItems });
+
+  const selectedEntries = listingQuery.data?.items.filter((entry) => localSelection.includes(entry.path)) ?? [];
+  const summary = statsQuery.data
+    ? t('localPanel.summary', {
+        files: statsQuery.data.file_count,
+        dirs: statsQuery.data.dir_count,
+        size: formatBytes(statsQuery.data.total_size),
+      })
+    : null;
 
   useEffect(() => {
     if (!listingQuery.data) {
       return;
     }
-    if (listingQuery.data.current_path !== localCurrentPath) {
+    if (listingQuery.data.current_path !== currentPath) {
       setLocalPath(listingQuery.data.current_path);
     }
-  }, [listingQuery.data, localCurrentPath, setLocalPath]);
+  }, [currentPath, listingQuery.data, setLocalPath]);
+
+  async function refreshWorkspace() {
+    await Promise.all([listingQuery.refetch(), statsQuery.refetch()]);
+  }
+
+  async function handleUploadSelection(files: FileList | null) {
+    const selectedFiles = Array.from(files ?? []);
+    if (!selectedFiles.length) {
+      return;
+    }
+    const relativePaths = selectedFiles.map((file) => {
+      const browserFile = file as BrowserFile;
+      return browserFile.webkitRelativePath && browserFile.webkitRelativePath.trim()
+        ? browserFile.webkitRelativePath
+        : file.name;
+    });
+
+    await uploadMutation.mutateAsync({
+      targetPath: listingQuery.data?.current_path || currentPath,
+      files: selectedFiles,
+      relativePaths,
+    });
+
+    pushToast({
+      tone: 'success',
+      title: t('localPanel.uploaded'),
+      message: t('localPanel.uploadedSummary', { total: selectedFiles.length }),
+    });
+    await refreshWorkspace();
+  }
+
+  function handleDelete() {
+    if (!selectedEntries.length) {
+      return;
+    }
+    const labels = selectedEntries.map((entry) => entry.path).join('\n');
+    openConfirm({
+      title: t('localPanel.deleteTitle'),
+      description: t('localPanel.deleteDescription', { labels }),
+      confirmLabel: t('localPanel.deleteConfirm'),
+      destructive: true,
+      onConfirm: async () => {
+        await deleteMutation.mutateAsync(selectedEntries.map((entry) => entry.path));
+        setLocalSelection([]);
+        pushToast({ tone: 'success', title: t('localPanel.deleted') });
+        await refreshWorkspace();
+      },
+    });
+  }
 
   return (
     <section className="panel-shell local-panel">
@@ -47,20 +118,9 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
         <div>
           <h3>{t('localPanel.title')}</h3>
           <p>{t('localPanel.description')}</p>
+          {summary ? <p className="mono-cell">{summary}</p> : null}
         </div>
-        <div className="panel-actions">
-          <select
-            className="panel-select"
-            value={drivesQuery.data?.items.some((item) => item.path === localCurrentPath) ? localCurrentPath : ''}
-            onChange={(event) => setLocalPath(event.target.value)}
-          >
-            <option value="">{t('localPanel.chooseDrive')}</option>
-            {drivesQuery.data?.items.map((drive) => (
-              <option key={drive.path} value={drive.path}>
-                {drive.label}
-              </option>
-            ))}
-          </select>
+        <div className="panel-actions wrap-actions">
           <button
             type="button"
             className="ghost-button"
@@ -73,10 +133,45 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
           >
             ..
           </button>
-          <button type="button" className="ghost-button" onClick={() => listingQuery.refetch()}>
+          <button type="button" className="ghost-button" onClick={() => void refreshWorkspace()}>
             {t('common.refresh')}
           </button>
+          <button type="button" className="ghost-button" onClick={() => fileInputRef.current?.click()}>
+            {t('localPanel.uploadFiles')}
+          </button>
+          <button type="button" className="ghost-button" onClick={() => folderInputRef.current?.click()}>
+            {t('localPanel.uploadFolder')}
+          </button>
+          <button
+            type="button"
+            className="ghost-button danger-text"
+            disabled={!selectedEntries.length}
+            onClick={handleDelete}
+          >
+            {t('localPanel.deleteSelected')}
+          </button>
         </div>
+        <input
+          ref={fileInputRef}
+          hidden
+          type="file"
+          multiple
+          onChange={(event) => {
+            void handleUploadSelection(event.target.files);
+            event.currentTarget.value = '';
+          }}
+        />
+        <input
+          ref={folderInputRef}
+          hidden
+          type="file"
+          multiple
+          {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+          onChange={(event) => {
+            void handleUploadSelection(event.target.files);
+            event.currentTarget.value = '';
+          }}
+        />
       </header>
       <div className="path-bar">
         <input
@@ -93,7 +188,7 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
       <FileTable
         entries={listingQuery.data?.items ?? []}
         selectedPaths={localSelection}
-        currentPath={listingQuery.data?.current_path || localCurrentPath}
+        currentPath={listingQuery.data?.current_path || currentPath}
         emptyMessage={t('localPanel.empty')}
         isLoading={listingQuery.isPending}
         errorMessage={listingQuery.error ? getErrorMessage(listingQuery.error, t('localPanel.loadError')) : null}

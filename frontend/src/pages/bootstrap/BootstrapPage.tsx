@@ -1,4 +1,4 @@
-﻿import { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useI18n } from '../../i18n';
@@ -11,8 +11,12 @@ export function BootstrapPage() {
   const { t } = useI18n();
 
   useEffect(() => {
-    if (status === 'ready') {
+    if (status === 'authenticated') {
       navigate('/workspace', { replace: true });
+      return;
+    }
+    if (status === 'anonymous') {
+      navigate('/login', { replace: true });
     }
   }, [navigate, status]);
 
@@ -33,7 +37,7 @@ export function BootstrapPage() {
             <p>{t('bootstrap.description')}</p>
             <div className="bootstrap-progress">
               <span className="progress-ping" />
-              <span>{status === 'ready' ? t('bootstrap.complete') : t('bootstrap.connecting')}</span>
+              <span>{status === 'authenticated' ? t('bootstrap.complete') : t('bootstrap.connecting')}</span>
             </div>
           </>
         )}

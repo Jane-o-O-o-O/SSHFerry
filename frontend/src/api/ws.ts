@@ -5,10 +5,9 @@ const TASK_SOCKET_PATH = '/api/ws/tasks';
 const LOG_SOCKET_PATH = '/api/ws/logs';
 const DRAG_MIME = 'application/x-sshferry-transfer';
 
-function buildSocketUrl(path: string, token: string): string {
+function buildSocketUrl(path: string): string {
   const base = import.meta.env.VITE_BACKEND_WS_URL ?? DEFAULT_WS_URL;
   const url = new URL(path, `${base.replace(/\/$/, '')}/`);
-  url.searchParams.set('token', token);
   return url.toString();
 }
 
@@ -20,12 +19,12 @@ function parseSocketMessage<T>(raw: string): T | null {
   }
 }
 
-export function getTaskSocketUrl(token: string): string {
-  return buildSocketUrl(TASK_SOCKET_PATH, token);
+export function getTaskSocketUrl(): string {
+  return buildSocketUrl(TASK_SOCKET_PATH);
 }
 
-export function getLogSocketUrl(token: string): string {
-  return buildSocketUrl(LOG_SOCKET_PATH, token);
+export function getLogSocketUrl(): string {
+  return buildSocketUrl(LOG_SOCKET_PATH);
 }
 
 export function parseTaskSocketMessage(raw: string): TaskSocketMessage | null {

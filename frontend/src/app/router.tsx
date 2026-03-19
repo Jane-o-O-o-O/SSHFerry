@@ -1,6 +1,8 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 
+import { ProtectedRoute } from '../components/auth/ProtectedRoute';
 import { BootstrapPage } from '../pages/bootstrap/BootstrapPage';
+import { LoginPage } from '../pages/login/LoginPage';
 import { LogsPage } from '../pages/logs/LogsPage';
 import { TasksPage } from '../pages/tasks/TasksPage';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage';
@@ -11,16 +13,32 @@ export const router = createBrowserRouter([
     element: <BootstrapPage />,
   },
   {
+    path: '/login',
+    element: <LoginPage />,
+  },
+  {
     path: '/workspace',
-    element: <WorkspacePage />,
+    element: (
+      <ProtectedRoute>
+        <WorkspacePage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: '/tasks',
-    element: <TasksPage />,
+    element: (
+      <ProtectedRoute>
+        <TasksPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: '/logs',
-    element: <LogsPage />,
+    element: (
+      <ProtectedRoute>
+        <LogsPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: '*',

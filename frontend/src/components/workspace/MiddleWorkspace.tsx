@@ -1,4 +1,4 @@
-﻿import type { TransferDragPayload } from '../../api/types';
+import type { TransferDragPayload } from '../../api/types';
 import { useI18n } from '../../i18n';
 import type { CenterPanelMode, RemotePaneState } from '../../store/workspace';
 import { LocalPanel } from '../file-browser/LocalPanel';
@@ -53,7 +53,7 @@ export function MiddleWorkspace({
               className={`middle-panel-button ${effectiveMode === 'local' ? 'is-active' : ''}`}
               onClick={() => onChangeMode('local')}
             >
-              {t('endpoint.local')}
+              {t('endpoint.workspace')}
             </button>
             <button
               type="button"
