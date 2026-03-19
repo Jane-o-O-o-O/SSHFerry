@@ -1,9 +1,9 @@
-﻿"""Remote file system routes."""
+"""Remote file system routes."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from backend.app.api.deps import get_app_state
+from backend.app.api.deps import get_app_state, require_current_user
 from backend.app.schemas.remote_files import (
     RemoteDeleteRequest,
     RemoteListResponse,
@@ -12,6 +12,7 @@ from backend.app.schemas.remote_files import (
     RemoteStatResponse,
 )
 from backend.app.services.app_state import AppState
+from backend.app.services.auth_service import AuthContext
 from backend.app.services.remote_file_service import RemoteFileService
 
 
@@ -22,9 +23,10 @@ router = APIRouter(prefix='/remote-files', tags=['remote-files'])
 def list_remote_dir(
     session_id: str = Query(..., min_length=1),
     path: str | None = Query(default=None),
+    context: AuthContext = Depends(require_current_user),
     app_state: AppState = Depends(get_app_state),
 ) -> RemoteListResponse:
-    service = RemoteFileService(app_state.remote_sessions, app_state.session_lock)
+    service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     current_path, parent_path, items = service.list_dir(session_id, path)
     return RemoteListResponse(
         session_id=session_id,
@@ -39,18 +41,20 @@ def list_remote_dir(
 def stat_remote_path(
     session_id: str = Query(..., min_length=1),
     path: str = Query(..., min_length=1),
+    context: AuthContext = Depends(require_current_user),
     app_state: AppState = Depends(get_app_state),
 ) -> RemoteStatResponse:
-    service = RemoteFileService(app_state.remote_sessions, app_state.session_lock)
+    service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     return RemoteStatResponse(entry=service.stat_path(session_id, path))
 
 
 @router.post('/mkdir', status_code=status.HTTP_204_NO_CONTENT)
 def mkdir_remote_path(
     payload: RemoteMkdirRequest,
+    context: AuthContext = Depends(require_current_user),
     app_state: AppState = Depends(get_app_state),
 ) -> Response:
-    service = RemoteFileService(app_state.remote_sessions, app_state.session_lock)
+    service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     service.mkdir(payload.session_id, payload.path)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -58,9 +62,10 @@ def mkdir_remote_path(
 @router.post('/rename', status_code=status.HTTP_204_NO_CONTENT)
 def rename_remote_path(
     payload: RemoteRenameRequest,
+    context: AuthContext = Depends(require_current_user),
     app_state: AppState = Depends(get_app_state),
 ) -> Response:
-    service = RemoteFileService(app_state.remote_sessions, app_state.session_lock)
+    service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     service.rename(payload.session_id, payload.old_path, payload.new_path)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -68,8 +73,9 @@ def rename_remote_path(
 @router.post('/delete', status_code=status.HTTP_204_NO_CONTENT)
 def delete_remote_path(
     payload: RemoteDeleteRequest,
+    context: AuthContext = Depends(require_current_user),
     app_state: AppState = Depends(get_app_state),
 ) -> Response:
-    service = RemoteFileService(app_state.remote_sessions, app_state.session_lock)
+    service = RemoteFileService(app_state.remote_sessions, context.user.user_id, app_state.session_lock)
     service.delete(payload.session_id, payload.path, recursive=payload.recursive)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -9,6 +9,8 @@ import secrets
 from threading import RLock
 from typing import TYPE_CHECKING
 
+from backend.app.config import RuntimeSettings, build_runtime_settings
+from backend.app.services.auth_service import AuthService
 from backend.app.services.log_service import LogService
 from src.services.site_store import SiteStore
 from src.shared.logging_ import setup_logger
@@ -43,8 +45,10 @@ class AppState:
     """Long-lived backend objects shared across requests."""
 
     logger: logging.Logger = field(default_factory=lambda: setup_logger('sshferry.backend'))
+    runtime_settings: RuntimeSettings = field(default_factory=build_runtime_settings)
     site_store: SiteStore = field(default_factory=_build_site_store)
     log_service: LogService = field(init=False)
+    auth_service: AuthService = field(init=False)
     scheduler: TaskScheduler | None = field(init=False, default=None)
     remote_sessions: dict[str, SiteConfig] = field(default_factory=dict)
     session_lock: RLock = field(default_factory=RLock)
@@ -53,6 +57,7 @@ class AppState:
 
     def __post_init__(self) -> None:
         self.log_service = LogService()
+        self.auth_service = AuthService(settings=self.runtime_settings, logger=self.logger)
         self.log_service.attach_logger(self.logger)
         self.log_service.attach_logger(logging.getLogger('src'))
         self.log_service.attach_logger(logging.getLogger('backend.app'))
@@ -66,26 +71,45 @@ class AppState:
     @property
     def is_ready(self) -> bool:
         """Return whether core backend services started successfully."""
-        return self.scheduler is not None and self.scheduler.running and self.startup_error is None
+        return (
+            self.scheduler is not None
+            and self.scheduler.running
+            and self.auth_service.is_ready
+            and self.startup_error is None
+        )
 
     def start(self) -> None:
         """Start backend background services."""
+        errors: list[str] = []
+        try:
+            self.auth_service.start()
+        except Exception as exc:
+            errors.append(str(exc))
+
+        try:
+            self.site_store.validate()
+        except Exception as exc:
+            errors.append(str(exc))
+
         try:
             from src.core.scheduler import TaskScheduler
 
             self.scheduler = TaskScheduler(logger=self.logger)
             self.scheduler.start()
-            self.startup_error = None
-            self.logger.info('Backend app state started')
         except Exception as exc:
             self.scheduler = None
-            self.startup_error = str(exc)
+            errors.append(str(exc))
             self.logger.error('Backend app state failed to start core services: %s', exc)
+
+        self.startup_error = '; '.join(errors) if errors else None
+        if self.startup_error is None:
+            self.logger.info('Backend app state started')
 
     def stop(self) -> None:
         """Stop backend background services."""
         if self.scheduler and self.scheduler.running:
             self.scheduler.stop()
+        self.auth_service.stop()
         self.logger.info('Backend app state stopped')
         self.log_service.close()
 

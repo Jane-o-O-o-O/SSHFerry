@@ -6,7 +6,7 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from backend.app.api.deps import require_websocket_local_token
+from backend.app.api.deps import require_websocket_authenticated, require_websocket_owner
 from backend.app.services.task_service import TaskService
 
 
@@ -38,15 +38,16 @@ def _log_snapshot_message(app_state) -> dict[str, object]:
 
 @router.websocket('/tasks')
 async def task_updates(websocket: WebSocket) -> None:
-    app_state = require_websocket_local_token(websocket)
+    context = require_websocket_authenticated(websocket)
     await websocket.accept()
+    app_state = websocket.app.state.app_state
     service = TaskService(app_state)
     last_payload = ''
 
     try:
         while True:
             try:
-                items = service.list_tasks()
+                items = service.list_tasks(context.user.user_id)
                 message = {
                     'type': 'task_snapshot',
                     'items': [item.model_dump() for item in items],
@@ -70,8 +71,9 @@ async def task_updates(websocket: WebSocket) -> None:
 
 @router.websocket('/logs')
 async def log_updates(websocket: WebSocket) -> None:
-    app_state = require_websocket_local_token(websocket)
+    require_websocket_owner(websocket)
     await websocket.accept()
+    app_state = websocket.app.state.app_state
     last_payload = ''
 
     try:
