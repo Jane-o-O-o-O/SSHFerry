@@ -69,23 +69,35 @@ def test_execute_remote_to_remote_file_uses_remote_transfer_engine():
             got_dst,
             _logger,
             parallel_threshold=None,
+            dualpath_threshold=None,
+            dualpath_chunk_size=None,
             relay_download_preset=None,
             relay_upload_preset=None,
         ):
             assert got_src == src_site
             assert got_dst == dst_site
             assert parallel_threshold == scheduler.parallel_threshold
+            assert dualpath_threshold == scheduler.remote_dualpath_threshold
+            assert dualpath_chunk_size == scheduler.remote_dualpath_chunk_size
             assert relay_download_preset == scheduler.parallel_download_preset
             assert relay_upload_preset == scheduler.parallel_upload_preset
 
-        def transfer_file(self, src, dst, callback=None, check_interrupt=None):
+        def transfer_file(self, src, dst, callback=None, check_interrupt=None, resume_offset=0, requested_engine=None):
             called["count"] += 1
             assert src == "/data/a.bin"
             assert dst == "/data/b.bin"
+            assert resume_offset == 0
+            assert requested_engine == "sftp"
             if callback:
                 callback(10, 10)
 
-    with patch("src.core.scheduler.RemoteToRemoteTransferEngine", FakeRemoteTransferEngine):
+    fake_dst_engine = MagicMock()
+    fake_dst_engine.stat.side_effect = SSHFerryError(ErrorCode.PATH_NOT_FOUND, "not found")
+
+    with patch("src.core.scheduler.SftpEngine", return_value=fake_dst_engine), patch(
+        "src.core.scheduler.RemoteToRemoteTransferEngine",
+        FakeRemoteTransferEngine,
+    ):
         scheduler._execute_remote_to_remote_file(task)
 
     assert called["count"] == 1
@@ -133,11 +145,560 @@ def test_remote_to_remote_large_file_prefers_parallel_bridge():
             logger,
             parallel_threshold=64,
         )
-        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=128):
+        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=128), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct",
+            side_effect=SSHFerryError(ErrorCode.TRANSFER_FAILED, "direct failed"),
+        ):
             mode = engine.transfer_file("/data/a.bin", "/data/b.bin")
 
     assert mode == "parallel_bridge"
     bridge.assert_called_once()
+
+
+def test_remote_to_remote_huge_file_prefers_dualpath():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"), patch(
+        "src.engines.remote_transfer_engine.RemoteToRemoteTransferEngine._transfer_file_dualpath"
+    ) as dualpath:
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(
+            src_site,
+            dst_site,
+            logger,
+            parallel_threshold=64,
+            dualpath_threshold=128,
+        )
+        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=256), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct",
+            side_effect=SSHFerryError(ErrorCode.TRANSFER_FAILED, "direct failed"),
+        ):
+            mode = engine.transfer_file("/data/a.bin", "/data/b.bin")
+
+    assert mode == "dualpath"
+    dualpath.assert_called_once()
+
+
+def test_remote_to_remote_explicit_dualpath_bypasses_direct_selection():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"), patch(
+        "src.engines.remote_transfer_engine.RemoteToRemoteTransferEngine._transfer_file_dualpath"
+    ) as dualpath:
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(
+            src_site,
+            dst_site,
+            logger,
+            parallel_threshold=64,
+            dualpath_threshold=128,
+        )
+        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=32), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct",
+        ) as direct:
+            mode = engine.transfer_file("/data/a.bin", "/data/b.bin", requested_engine="dualpath")
+
+    assert mode == "dualpath"
+    dualpath.assert_called_once()
+    direct.assert_not_called()
+
+
+def test_remote_to_remote_huge_file_prefers_direct_when_available():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(
+            src_site,
+            dst_site,
+            logger,
+            parallel_threshold=64,
+            dualpath_threshold=128,
+        )
+        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=256), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct",
+        ) as direct, patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_dualpath",
+        ) as dualpath:
+            mode = engine.transfer_file("/data/a.bin", "/data/b.bin")
+
+    assert mode == "direct"
+    direct.assert_called_once()
+    dualpath.assert_not_called()
+
+
+def test_metric_preset_for_dualpath_remote_transfer_uses_parallel_bucket():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.core.scheduler.MetricsCollector"):
+        scheduler = TaskScheduler(logger=MagicMock(), parallel_preset="high")
+
+    task = Task(
+        task_id="r2r-metric",
+        kind="file_transfer",
+        engine="dualpath",
+        src="/data/a.bin",
+        dst="/data/b.bin",
+        bytes_total=256,
+        src_endpoint_type="remote",
+        dst_endpoint_type="remote",
+        src_site_snapshot=src_site,
+        dst_site_snapshot=dst_site,
+    )
+
+    assert scheduler._metric_preset_for_task(task) == "high"
+
+
+def test_remote_to_remote_resume_offset_prefers_resumable_bridge():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(
+            src_site,
+            dst_site,
+            logger,
+            parallel_threshold=64,
+            dualpath_threshold=128,
+        )
+        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=256), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct_resume",
+        ) as direct_resume, patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct",
+        ) as direct, patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_dualpath",
+        ) as dualpath:
+            mode = engine.transfer_file("/data/a.bin", "/data/b.bin", resume_offset=64)
+
+    assert mode == "direct_resume"
+    direct_resume.assert_called_once()
+    direct.assert_not_called()
+    dualpath.assert_not_called()
+
+
+def test_remote_to_remote_resume_falls_back_to_bridge_when_direct_resume_fails():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(
+            src_site,
+            dst_site,
+            logger,
+            parallel_threshold=64,
+            dualpath_threshold=128,
+        )
+        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=256), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct_resume",
+            side_effect=SSHFerryError(ErrorCode.TRANSFER_FAILED, "resume failed"),
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_relay",
+        ) as relay:
+            mode = engine.transfer_file("/data/a.bin", "/data/b.bin", resume_offset=64)
+
+    assert mode == "bridge_resume"
+    relay.assert_called_once()
+    assert relay.call_args.kwargs["offset"] == 64
+
+
+def test_remote_to_remote_direct_attempt_allowed_for_password_site():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    dst_site.auth_method = "password"
+    dst_site.key_path = None
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(
+            src_site,
+            dst_site,
+            logger,
+            parallel_threshold=64,
+            dualpath_threshold=128,
+        )
+        with patch.object(RemoteToRemoteTransferEngine, "_remote_file_size", return_value=256), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_file_direct",
+        ) as direct:
+            mode = engine.transfer_file("/data/a.bin", "/data/b.bin")
+
+    assert mode == "direct"
+    direct.assert_called_once()
+
+
+def test_build_direct_scp_command_uses_site_ssh_metadata():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    dst_site.auth_method = "password"
+    dst_site.key_path = r"D:\keys\id_rsa"
+    dst_site.port = 60066
+    dst_site.proxy_jump = "jump.example.com"
+    dst_site.ssh_config_path = "/root/.ssh/config"
+    dst_site.ssh_options = ["Compression=yes", "-o ConnectTimeout=5"]
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        command = engine._build_direct_scp_command("/data/src.bin", "/data/dst.bin")
+
+    assert "'scp'" in command
+    assert "'-P' '60066'" in command
+    assert "'-F' '/root/.ssh/config'" in command
+    assert "'-o' 'ProxyJump=jump.example.com'" in command
+    assert "'-o' 'Compression=yes'" in command
+    assert "'-o' 'ConnectTimeout=5'" in command
+    assert "D:\\keys\\id_rsa" not in command
+    assert "'user@dst.example.com:/data/dst.bin'" in command
+
+
+def test_build_direct_ssh_probe_command_uses_site_ssh_metadata():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    dst_site.auth_method = "password"
+    dst_site.key_path = None
+    dst_site.port = 60066
+    dst_site.proxy_jump = "jump.example.com"
+    dst_site.ssh_config_path = "/root/.ssh/config"
+    dst_site.ssh_options = ["ServerAliveInterval=15"]
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        command = engine._build_direct_ssh_probe_command("/data/dst.bin")
+
+    assert "'ssh'" in command
+    assert "'-p' '60066'" in command
+    assert "'-F' '/root/.ssh/config'" in command
+    assert "'-o' 'ProxyJump=jump.example.com'" in command
+    assert "'-o' 'ServerAliveInterval=15'" in command
+    assert "'user@dst.example.com'" in command
+    assert "SSHFERRY_DIRECT_OK" in command
+
+
+def test_build_direct_commands_use_ephemeral_key_override():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    dst_site.auth_method = "password"
+    dst_site.key_path = None
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        direct_auth = {"mode": "ephemeral_key", "key_path": "/tmp/sshferry-direct-key"}
+        probe_command = engine._build_direct_ssh_probe_command("/data/dst.bin", direct_auth=direct_auth)
+        scp_command = engine._build_direct_scp_command("/data/src.bin", "/data/dst.bin", direct_auth=direct_auth)
+
+    assert "'-i' '/tmp/sshferry-direct-key'" in probe_command
+    assert "'-i' '/tmp/sshferry-direct-key'" in scp_command
+
+
+def test_build_direct_resume_command_uses_tail_and_ssh_append():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    dst_site.auth_method = "password"
+    dst_site.key_path = None
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        command = engine._build_direct_resume_command(
+            "/data/src.bin",
+            "/data/dst.bin",
+            64,
+            direct_auth={"mode": "ephemeral_key", "key_path": "/tmp/sshferry-direct-key"},
+        )
+
+    assert "command -v tail" in command
+    assert "tail -c +$((64 + 1)) '/data/src.bin'" in command
+    assert "'ssh'" in command
+    assert "'-i' '/tmp/sshferry-direct-key'" in command
+    assert "cat >> " in command
+    assert "/data/dst.bin" in command
+
+
+def test_prepare_direct_auth_bootstraps_ephemeral_key_for_password_site():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    dst_site.auth_method = "password"
+    dst_site.key_path = None
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        src_engine = MagicMock()
+        dst_engine = MagicMock()
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_exec_remote_command",
+            side_effect=[
+                (0, "ssh-ed25519 AAAATEST sshferry-direct-1\n", ""),
+                (0, "", ""),
+            ],
+        ):
+            direct_auth = engine._prepare_direct_auth(src_engine, dst_engine)
+
+    assert direct_auth is not None
+    assert direct_auth["mode"] == "ephemeral_key"
+    assert direct_auth["key_path"].startswith("/tmp/sshferry-direct-")
+    assert direct_auth["marker"].startswith("sshferry-direct-")
+
+
+def test_probe_direct_connectivity_surfaces_stderr_details():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        src_engine = MagicMock()
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_exec_remote_command",
+            return_value=(255, "", "lost connection"),
+        ):
+            try:
+                engine._probe_direct_connectivity(src_engine, "/data/dst.bin")
+            except SSHFerryError as exc:
+                assert "direct probe failed" in exc.message
+                assert "stderr=lost connection" in exc.message
+            else:
+                raise AssertionError("expected probe failure")
+
+
+def test_cleanup_direct_auth_removes_ephemeral_key_and_authorized_key():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        src_engine = MagicMock()
+        dst_engine = MagicMock()
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_exec_remote_command",
+            side_effect=[(0, "", ""), (0, "", "")],
+        ) as exec_cmd:
+            engine._cleanup_direct_auth(
+                src_engine,
+                dst_engine,
+                {
+                    "mode": "ephemeral_key",
+                    "key_path": "/tmp/sshferry-direct-1",
+                    "marker": "sshferry-direct-1",
+                },
+            )
+
+    assert exec_cmd.call_count == 2
+
+
+def test_exec_remote_command_with_progress_reports_destination_growth():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, MagicMock())
+        src_engine = MagicMock()
+        dst_engine = MagicMock()
+        channel = MagicMock()
+        channel.exit_status_ready.side_effect = [False, False, True]
+        channel.recv_exit_status.return_value = 0
+        stdout = MagicMock()
+        stdout.channel = channel
+        stdout.read.return_value = b""
+        stderr = MagicMock()
+        stderr.read.return_value = b""
+        src_engine.ssh_client.exec_command.return_value = (MagicMock(), stdout, stderr)
+        dst_engine.stat.side_effect = [SimpleNamespace(size=16), SimpleNamespace(size=48)]
+
+        progress_updates: list[int] = []
+        with patch("src.engines.remote_transfer_engine.time.sleep"):
+            exit_code, std_out, std_err = engine._exec_remote_command_with_progress(
+                src_engine,
+                dst_engine,
+                "scp ...",
+                "/data/dst.bin",
+                64,
+                callback=lambda done, _total: progress_updates.append(done),
+            )
+
+    assert exit_code == 0
+    assert std_out == ""
+    assert std_err == ""
+    assert progress_updates == [16, 48, 64]
+
+
+def test_scheduler_remote_to_remote_resume_uses_existing_destination_prefix():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.core.scheduler.MetricsCollector"):
+        scheduler = TaskScheduler(logger=MagicMock())
+
+    task = Task(
+        task_id="r2r-resume",
+        kind="file_transfer",
+        engine="dualpath",
+        src="/data/a.bin",
+        dst="/data/b.bin",
+        bytes_total=100,
+        bytes_done=40,
+        src_endpoint_type="remote",
+        dst_endpoint_type="remote",
+        src_site_snapshot=src_site,
+        dst_site_snapshot=dst_site,
+        status="running",
+        paused=False,
+    )
+
+    fake_dst_engine = MagicMock()
+    fake_dst_engine.stat.return_value = SimpleNamespace(size=55)
+
+    class FakeRemoteTransferEngine:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def transfer_file(self, src, dst, callback=None, check_interrupt=None, resume_offset=0, requested_engine=None):
+            assert src == "/data/a.bin"
+            assert dst == "/data/b.bin"
+            assert resume_offset == 55
+            assert requested_engine == "dualpath"
+            if callback:
+                callback(100, 100)
+            return "bridge_resume"
+
+    with patch("src.core.scheduler.SftpEngine", return_value=fake_dst_engine), patch(
+        "src.core.scheduler.RemoteToRemoteTransferEngine",
+        FakeRemoteTransferEngine,
+    ):
+        scheduler._execute_remote_to_remote_file(task)
+
+    assert task.bytes_done == 100
+
+
+def test_scheduler_remote_to_remote_overwrites_fresh_task_even_when_destination_size_matches():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.core.scheduler.MetricsCollector"):
+        scheduler = TaskScheduler(logger=MagicMock())
+
+    task = Task(
+        task_id="r2r-skip",
+        kind="file_transfer",
+        engine="dualpath",
+        src="/data/a.bin",
+        dst="/data/b.bin",
+        bytes_total=100,
+        bytes_done=0,
+        src_endpoint_type="remote",
+        dst_endpoint_type="remote",
+        src_site_snapshot=src_site,
+        dst_site_snapshot=dst_site,
+        status="running",
+        paused=False,
+    )
+
+    fake_dst_engine = MagicMock()
+    fake_dst_engine.stat.return_value = SimpleNamespace(size=100)
+
+    class FakeRemoteTransferEngine:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def transfer_file(self, src, dst, callback=None, check_interrupt=None, resume_offset=0, requested_engine=None):
+            assert src == "/data/a.bin"
+            assert dst == "/data/b.bin"
+            assert resume_offset == 0
+            assert requested_engine == "dualpath"
+            if callback:
+                callback(100, 100)
+            return "dualpath"
+
+    with patch("src.core.scheduler.SftpEngine", return_value=fake_dst_engine), patch(
+        "src.core.scheduler.RemoteToRemoteTransferEngine",
+        FakeRemoteTransferEngine,
+    ):
+        scheduler._execute_remote_to_remote_file(task)
+
+    assert task.status == "running"
+    assert task.skipped is False
+    assert task.bytes_done == 100
+
+
+def test_scheduler_remote_to_remote_skips_resumed_task_when_destination_already_complete():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.core.scheduler.MetricsCollector"):
+        scheduler = TaskScheduler(logger=MagicMock())
+
+    task = Task(
+        task_id="r2r-skip",
+        kind="file_transfer",
+        engine="dualpath",
+        src="/data/a.bin",
+        dst="/data/b.bin",
+        bytes_total=100,
+        bytes_done=40,
+        src_endpoint_type="remote",
+        dst_endpoint_type="remote",
+        src_site_snapshot=src_site,
+        dst_site_snapshot=dst_site,
+        status="running",
+        paused=False,
+    )
+
+    fake_dst_engine = MagicMock()
+    fake_dst_engine.stat.return_value = SimpleNamespace(size=100)
+
+    with patch("src.core.scheduler.SftpEngine", return_value=fake_dst_engine), patch(
+        "src.core.scheduler.RemoteToRemoteTransferEngine",
+    ) as transfer_engine:
+        scheduler._execute_remote_to_remote_file(task)
+
+    assert task.status == "skipped"
+    assert task.skipped is True
+    assert task.bytes_done == 100
+    assert task.end_time is not None
+    transfer_engine.assert_not_called()
 
 
 def test_remote_to_remote_bridge_uses_parallel_workers_for_large_file():

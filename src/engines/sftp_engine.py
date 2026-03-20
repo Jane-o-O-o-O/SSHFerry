@@ -46,6 +46,7 @@ class SftpEngine:
         self.ssh_client: Optional[SSHClient] = None
         self.sftp_client: Optional[SFTPClient] = None
         self._connected = False
+        self._ever_connected = False
 
     def connect(self) -> None:
         """
@@ -70,6 +71,18 @@ class SftpEngine:
             "banner_timeout": 20,
             "auth_timeout": 20,
         }
+        connect_kwargs["timeout"] = max(
+            1,
+            int(os.getenv("SSHFERRY_CONNECT_TIMEOUT_SECONDS", str(connect_kwargs["timeout"])) or connect_kwargs["timeout"]),
+        )
+        connect_kwargs["banner_timeout"] = max(
+            1,
+            int(os.getenv("SSHFERRY_BANNER_TIMEOUT_SECONDS", str(connect_kwargs["banner_timeout"])) or connect_kwargs["banner_timeout"]),
+        )
+        connect_kwargs["auth_timeout"] = max(
+            1,
+            int(os.getenv("SSHFERRY_AUTH_TIMEOUT_SECONDS", str(connect_kwargs["auth_timeout"])) or connect_kwargs["auth_timeout"]),
+        )
 
         if self.site_config.auth_method == "password":
             connect_kwargs["password"] = self.site_config.password
@@ -79,8 +92,8 @@ class SftpEngine:
             if self.site_config.key_passphrase:
                 connect_kwargs["passphrase"] = self.site_config.key_passphrase
 
-        attempts = 2
-        retry_delay_seconds = 1.0
+        attempts = max(1, int(os.getenv("SSHFERRY_CONNECT_ATTEMPTS", "2") or "2"))
+        retry_delay_seconds = max(0.2, float(os.getenv("SSHFERRY_CONNECT_RETRY_DELAY_SECONDS", "1.0") or "1.0"))
         last_error: Exception | None = None
 
         for attempt in range(1, attempts + 1):
@@ -96,6 +109,7 @@ class SftpEngine:
                 self.ssh_client.connect(**connect_kwargs)
                 self.sftp_client = self.ssh_client.open_sftp()
                 self._connected = True
+                self._ever_connected = True
                 self.logger.info(
                     f"Connected to {self.site_config.host}:{self.site_config.port}"
                 )
@@ -106,17 +120,21 @@ class SftpEngine:
             except (paramiko.SSHException, socket.timeout, TimeoutError, OSError) as e:
                 self.disconnect()
                 last_error = e
+                error_text = str(e)
+                is_banner_error = "Error reading SSH protocol banner" in error_text
                 if attempt < attempts:
+                    current_delay = retry_delay_seconds * (2 if is_banner_error else 1)
                     self.logger.warning(
-                        "SSH connect attempt %s/%s failed for %s:%s: %s; retrying in %.1fs",
+                        "SSH connect attempt %s/%s failed for %s:%s: %s%s; retrying in %.1fs",
                         attempt,
                         attempts,
                         self.site_config.host,
                         self.site_config.port,
                         e,
-                        retry_delay_seconds,
+                        " [banner]" if is_banner_error else "",
+                        current_delay,
                     )
-                    time.sleep(retry_delay_seconds)
+                    time.sleep(current_delay)
                     retry_delay_seconds *= 2
                     continue
                 raise NetworkError(ErrorCode.REMOTE_DISCONNECT, f"SSH error: {e}")
@@ -129,6 +147,7 @@ class SftpEngine:
 
     def disconnect(self) -> None:
         """Close SSH and SFTP connections."""
+        had_connection = self._connected or self.sftp_client is not None or self.ssh_client is not None
         if self.sftp_client:
             self.sftp_client.close()
             self.sftp_client = None
@@ -136,7 +155,8 @@ class SftpEngine:
             self.ssh_client.close()
             self.ssh_client = None
         self._connected = False
-        self.logger.info("Disconnected from server")
+        if had_connection and self._ever_connected:
+            self.logger.info("Disconnected from server")
 
     def is_connected(self) -> bool:
         """Check if connected."""

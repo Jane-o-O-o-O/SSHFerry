@@ -308,3 +308,53 @@ def test_folder_upload_parallelizes_large_child_file(tmp_path):
     assert parallel_calls == [(str(local_file), "/remote/big.bin")]
     assert task.subtask_done == 1
     assert task.bytes_done == 32
+
+
+def test_progress_callback_uses_rolling_speed_window():
+    scheduler = create_mock_scheduler()
+    task = Task(task_id="speed1", kind="file_transfer", engine="sftp", src="a", dst="b", bytes_total=1000, status="running")
+    task.start_time = 100.0
+    callback = scheduler._progress_callback(task)
+
+    with patch("src.core.scheduler.time.time", side_effect=[100.0, 101.0, 102.0, 107.0]):
+        callback(0, 1000)
+        callback(400, 1000)
+        callback(900, 1000)
+        with scheduler.task_lock:
+            scheduler._refresh_task_speed_locked(task)
+
+    assert task.speed == 0.0
+
+
+def test_progress_callback_uses_recent_samples_not_lifetime_average():
+    scheduler = create_mock_scheduler()
+    task = Task(task_id="speed2", kind="file_transfer", engine="sftp", src="a", dst="b", bytes_total=1000, status="running")
+    task.start_time = 100.0
+    callback = scheduler._progress_callback(task)
+
+    with patch("src.core.scheduler.time.time", side_effect=[100.0, 101.0, 102.0]):
+        callback(0, 1000)
+        callback(400, 1000)
+        callback(900, 1000)
+
+    assert task.speed > 400
+
+
+def test_progress_callback_does_not_advance_when_task_is_paused():
+    scheduler = create_mock_scheduler()
+    task = Task(
+        task_id="pause-progress",
+        kind="file_transfer",
+        engine="sftp",
+        src="a",
+        dst="b",
+        bytes_total=1000,
+        bytes_done=400,
+        status="paused",
+        paused=True,
+    )
+    callback = scheduler._progress_callback(task)
+
+    callback(700, 1000)
+
+    assert task.bytes_done == 400

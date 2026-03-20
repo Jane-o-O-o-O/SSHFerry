@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.ui.theme import TOKENS, alpha_hex
 
 
 def build_stylesheet() -> str:
+    checkmark_path = (Path(__file__).resolve().parent / "assets" / "checkmark.svg").as_posix()
     return f"""
 QWidget {{
     color: {TOKENS.text_main};
@@ -181,7 +184,6 @@ QPushButton[chrome="icon"]:pressed {{
 
 QPushButton#siteActionButton {{
     min-width: 0;
-    max-width: 16777215px;
     min-height: 42px;
     max-height: 42px;
     padding: 0;
@@ -295,7 +297,48 @@ QSplitter::handle {{
 
 QCheckBox {{
     spacing: 8px;
-    color: {TOKENS.text_soft};
+    color: {TOKENS.text_main};
+}}
+
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid {TOKENS.line_strong};
+    background-color: {TOKENS.bg_panel_alt};
+}}
+
+QCheckBox::indicator:unchecked {{
+    background-color: {TOKENS.bg_panel_alt};
+    border: 1px solid {TOKENS.line_strong};
+}}
+
+QCheckBox::indicator:checked {{
+    background-color: {TOKENS.accent};
+    border: 1px solid {TOKENS.accent_strong};
+    image: url({checkmark_path});
+}}
+
+QCheckBox::indicator:hover {{
+    border: 1px solid {TOKENS.accent};
+}}
+
+QCheckBox#taskRowCheckbox::indicator {{
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid {TOKENS.line_strong};
+    background-color: {TOKENS.bg_panel_strong};
+}}
+
+QCheckBox#taskRowCheckbox::indicator:checked {{
+    background-color: {TOKENS.accent};
+    border: 1px solid {TOKENS.accent_strong};
+    image: url({checkmark_path});
+}}
+
+QCheckBox#taskRowCheckbox::indicator:hover {{
+    border: 1px solid {TOKENS.accent};
 }}
 
 QDialog {{

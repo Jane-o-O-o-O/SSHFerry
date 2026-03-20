@@ -81,6 +81,20 @@ class TaskScheduler:
             parallel_threshold,
             1,
         )
+        self.remote_dualpath_threshold = _env_int(
+            "SSHFERRY_REMOTE_DUALPATH_THRESHOLD_BYTES",
+            max(self.parallel_threshold, 128 * 1024 * 1024),
+            1,
+        )
+        self.remote_dualpath_chunk_size = _env_int(
+            "SSHFERRY_REMOTE_DUALPATH_CHUNK_BYTES",
+            32 * 1024 * 1024,
+            1024 * 1024,
+        )
+        self.speed_window_seconds = max(
+            0.5,
+            float(os.getenv("SSHFERRY_SPEED_WINDOW_SECONDS", "4.0") or "4.0"),
+        )
         self.folder_file_workers = _env_int("SSHFERRY_FOLDER_FILE_WORKERS", 3, 1)
         self.folder_parallel_file_slots = _env_int("SSHFERRY_FOLDER_PARALLEL_FILE_SLOTS", 1, 1)
         self.logger = logger or logging.getLogger(__name__)
@@ -95,8 +109,9 @@ class TaskScheduler:
             "sftp": self.max_workers_sftp,
             "scp": self.max_workers_scp,
             "parallel": self.max_workers_parallel,
+            "dualpath": self.max_workers_parallel,
         }
-        self._rr_protocols = ["sftp", "scp", "parallel"]
+        self._rr_protocols = ["sftp", "scp", "parallel", "dualpath"]
         self._rr_index = 0
         self._last_scheduler_stats_log = 0.0
 
@@ -139,10 +154,16 @@ class TaskScheduler:
 
     def get_task(self, task_id: str) -> Optional[Task]:
         with self.task_lock:
-            return self.tasks.get(task_id)
+            task = self.tasks.get(task_id)
+            if task and task.status == "running":
+                self._refresh_task_speed_locked(task)
+            return task
 
     def get_all_tasks(self) -> List[Task]:
         with self.task_lock:
+            for task in self.tasks.values():
+                if task.status == "running":
+                    self._refresh_task_speed_locked(task)
             return [replace(task) for task in self.tasks.values()]
 
     def pending_task_count(self) -> int:
@@ -180,9 +201,11 @@ class TaskScheduler:
                 return False
             self._set_task_status_locked(task, "pending")
             task.paused = False
+            task.speed = 0.0
+            task.avg_speed = 0.0
+            task.speed_samples.clear()
             if task.kind == "folder_transfer":
                 task.bytes_done = 0
-                task.speed = 0.0
                 task.subtask_done = 0
                 task.current_file = ""
             if task_id not in self.queued_task_ids:
@@ -198,6 +221,8 @@ class TaskScheduler:
             self._set_task_status_locked(task, "pending")
             task.bytes_done = 0
             task.speed = 0.0
+            task.avg_speed = 0.0
+            task.speed_samples.clear()
             task.error_code = None
             task.error_message = None
             task.start_time = None
@@ -265,7 +290,7 @@ class TaskScheduler:
         return None
 
     def _task_protocol(self, task: Task) -> str:
-        return task.engine if task.engine in ("sftp", "scp", "parallel") else "sftp"
+        return task.engine if task.engine in ("sftp", "scp", "parallel", "dualpath") else "sftp"
 
     def _maybe_log_scheduler_stats(self) -> None:
         now = time.time()
@@ -342,6 +367,10 @@ class TaskScheduler:
         with self.task_lock:
             self._set_task_status_locked(task, "running")
             task.start_time = time.time()
+            task.speed = 0.0
+            task.avg_speed = 0.0
+            task.speed_samples.clear()
+            task.speed_samples.append((task.start_time, task.bytes_done))
 
         remote_site = task.dst_site_snapshot or task.src_site_snapshot or self.site_config
         log_task_event(
@@ -375,6 +404,8 @@ class TaskScheduler:
                     self._set_task_status_locked(task, "done")
                     task.end_time = time.time()
                     task.bytes_done = task.bytes_total
+                    task.avg_speed = self._finalize_task_speed_locked(task)
+                    task.speed = task.avg_speed
 
             if task.kind in ("file_transfer", "folder_transfer") and task.status == "done":
                 duration = time.time() - (task.start_time or time.time())
@@ -404,6 +435,8 @@ class TaskScheduler:
                 task.end_time = time.time()
                 task.error_code = exc.code
                 task.error_message = exc.message
+                task.avg_speed = self._finalize_task_speed_locked(task)
+                task.speed = task.avg_speed
             self._record_failed_metrics(task)
             log_task_event(
                 self.logger,
@@ -422,6 +455,8 @@ class TaskScheduler:
                 task.end_time = time.time()
                 task.error_code = ErrorCode.UNKNOWN_ERROR
                 task.error_message = str(exc)
+                task.avg_speed = self._finalize_task_speed_locked(task)
+                task.speed = task.avg_speed
             self._record_failed_metrics(task)
             log_task_event(
                 self.logger,
@@ -452,12 +487,7 @@ class TaskScheduler:
     def _progress_callback(self, task: Task):
         def callback(bytes_transferred, bytes_total):
             with self.task_lock:
-                task.bytes_done = bytes_transferred
-                task.bytes_total = bytes_total
-                if task.start_time:
-                    elapsed = time.time() - task.start_time
-                    if elapsed > 0:
-                        task.speed = bytes_transferred / elapsed
+                self._record_task_progress_locked(task, bytes_transferred, bytes_total)
 
         return callback
 
@@ -473,10 +503,58 @@ class TaskScheduler:
 
     def _handle_interrupted(self, task: Task) -> None:
         with self.task_lock:
+            interruption_reason = "paused" if task.paused else "canceled"
             if task.paused:
                 self._set_task_status_locked(task, "paused")
             else:
                 self._set_task_status_locked(task, "canceled")
+            task.end_time = time.time()
+            task.avg_speed = self._finalize_task_speed_locked(task)
+            task.speed = task.avg_speed
+        self.logger.info(
+            "task_interrupted task=%s kind=%s status=%s reason=%s bytes_done=%s bytes_total=%s",
+            task.task_id[:8],
+            task.kind,
+            task.status,
+            interruption_reason,
+            task.bytes_done,
+            task.bytes_total,
+        )
+
+    def _record_task_progress_locked(self, task: Task, bytes_transferred: int, bytes_total: int) -> None:
+        if task.paused or task.status in ("paused", "canceled"):
+            return
+        now = time.time()
+        task.bytes_done = bytes_transferred
+        task.bytes_total = bytes_total
+        if task.speed_samples and task.speed_samples[-1][1] == bytes_transferred:
+            task.speed_samples[-1] = (now, bytes_transferred)
+        else:
+            task.speed_samples.append((now, bytes_transferred))
+        self._refresh_task_speed_locked(task, now)
+
+    def _refresh_task_speed_locked(self, task: Task, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        cutoff = now - self.speed_window_seconds
+        while len(task.speed_samples) > 1 and task.speed_samples[0][0] < cutoff:
+            task.speed_samples.popleft()
+        if not task.speed_samples:
+            task.speed = 0.0
+            return
+        last_time, last_bytes = task.speed_samples[-1]
+        if now - last_time >= self.speed_window_seconds:
+            task.speed = 0.0
+            return
+        first_time, first_bytes = task.speed_samples[0]
+        elapsed = max(0.001, last_time - first_time)
+        delta = max(0, last_bytes - first_bytes)
+        task.speed = delta / elapsed if delta > 0 else 0.0
+
+    def _finalize_task_speed_locked(self, task: Task) -> float:
+        if not task.start_time or not task.end_time:
+            return 0.0
+        elapsed = max(0.001, task.end_time - task.start_time)
+        return task.bytes_done / elapsed if task.bytes_done > 0 else 0.0
 
     def _execute_file_transfer(self, task: Task):
         try:
@@ -666,19 +744,58 @@ class TaskScheduler:
     def _execute_remote_to_remote_file(self, task: Task):
         src_site = self._require_site(task.src_site_snapshot, "remote source")
         dst_site = self._require_site(task.dst_site_snapshot, "remote destination")
+        resume_offset, skip_existing = self._remote_to_remote_resume_state(task, dst_site)
+        if resume_offset > 0 and not skip_existing:
+            self.logger.info(
+                "task_remote_transfer_resume_detected task=%s src=%s dst=%s resume_offset=%s bytes_total=%s",
+                task.task_id[:8],
+                task.src,
+                task.dst,
+                resume_offset,
+                task.bytes_total,
+            )
+        if skip_existing:
+            with self.task_lock:
+                task.skipped = True
+                task.bytes_done = task.bytes_total
+                task.end_time = time.time()
+                task.speed = 0.0
+                task.avg_speed = 0.0
+                task.speed_samples.clear()
+                self._set_task_status_locked(task, "skipped")
+            self.logger.info(
+                "task_remote_transfer_mode task=%s mode=skipped_existing src=%s dst=%s resume_offset=%s",
+                task.task_id[:8],
+                task.src,
+                task.dst,
+                resume_offset,
+            )
+            return
         engine = RemoteToRemoteTransferEngine(
             src_site,
             dst_site,
             self.logger,
             parallel_threshold=self.parallel_threshold,
+            dualpath_threshold=self.remote_dualpath_threshold,
+            dualpath_chunk_size=self.remote_dualpath_chunk_size,
             relay_download_preset=self.remote_relay_download_preset,
             relay_upload_preset=self.remote_relay_upload_preset,
         )
-        engine.transfer_file(
+        mode = engine.transfer_file(
             task.src,
             task.dst,
             callback=self._progress_callback(task),
             check_interrupt=self._interrupt_checker(task),
+            resume_offset=resume_offset,
+            requested_engine=task.engine,
+        )
+        self.logger.info(
+            "task_remote_transfer_mode task=%s mode=%s src=%s dst=%s resume_offset=%s",
+            task.task_id[:8],
+            mode,
+            task.src,
+            task.dst,
+            resume_offset,
         )
 
     def _execute_remote_to_remote_folder(self, task: Task):
@@ -689,6 +806,8 @@ class TaskScheduler:
             dst_site,
             self.logger,
             parallel_threshold=self.parallel_threshold,
+            dualpath_threshold=self.remote_dualpath_threshold,
+            dualpath_chunk_size=self.remote_dualpath_chunk_size,
             relay_download_preset=self.remote_relay_download_preset,
             relay_upload_preset=self.remote_relay_upload_preset,
         )
@@ -799,11 +918,11 @@ class TaskScheduler:
 
                 def progress_callback(bytes_transferred, _bytes_total):
                     with self.task_lock:
-                        task.bytes_done = min(task.bytes_total, base_bytes + bytes_transferred)
-                        if task.start_time:
-                            elapsed = time.time() - task.start_time
-                            if elapsed > 0:
-                                task.speed = task.bytes_done / elapsed
+                        self._record_task_progress_locked(
+                            task,
+                            min(task.bytes_total, base_bytes + bytes_transferred),
+                            task.bytes_total,
+                        )
 
                 engine.upload_file(full_path, remote_path, callback=progress_callback, check_interrupt=check_interrupt, offset=offset)
                 with self.task_lock:
@@ -842,11 +961,11 @@ class TaskScheduler:
 
             def progress_callback(bytes_transferred, _bytes_total):
                 with self.task_lock:
-                    task.bytes_done = min(task.bytes_total, base_bytes + bytes_transferred)
-                    if task.start_time:
-                        elapsed = time.time() - task.start_time
-                        if elapsed > 0:
-                            task.speed = task.bytes_done / elapsed
+                    self._record_task_progress_locked(
+                        task,
+                        min(task.bytes_total, base_bytes + bytes_transferred),
+                        task.bytes_total,
+                    )
 
             engine.download_file(entry.path, local_path, callback=progress_callback, check_interrupt=check_interrupt, offset=offset)
             with self.task_lock:
@@ -952,18 +1071,17 @@ class TaskScheduler:
                 previous = transferred.get(file_key, 0)
                 delta = max(0, absolute_done - previous)
                 transferred[file_key] = absolute_done
-                task.bytes_done = min(task.bytes_total, task.bytes_done + delta)
+                current_done = min(task.bytes_total, task.bytes_done + delta)
+                self._record_task_progress_locked(task, current_done, task.bytes_total)
                 task.current_file = os.path.basename(file_key)
-                if task.start_time:
-                    elapsed = time.time() - task.start_time
-                    if elapsed > 0:
-                        task.speed = task.bytes_done / elapsed
 
         def mark_complete(file_key: str, file_size: int) -> None:
             with self.task_lock, progress_lock:
                 previous = transferred.get(file_key, 0)
                 if previous < file_size:
                     task.bytes_done = min(task.bytes_total, task.bytes_done + (file_size - previous))
+                    task.speed_samples.append((time.time(), task.bytes_done))
+                    self._refresh_task_speed_locked(task)
                     transferred[file_key] = file_size
                 task.subtask_done += 1
                 task.current_file = os.path.basename(file_key)
@@ -1134,7 +1252,7 @@ class TaskScheduler:
         mark_complete(file_key, file_size)
 
     def _metric_preset_for_task(self, task: Task) -> str:
-        if task.engine != "parallel":
+        if task.engine not in ("parallel", "dualpath"):
             return task.engine
         if task.is_local_to_remote:
             return self.parallel_upload_preset
@@ -1147,6 +1265,63 @@ class TaskScheduler:
         if not site:
             raise SSHFerryError(ErrorCode.UNKNOWN_ERROR, f"Missing {label} site configuration")
         return site
+
+    def _remote_to_remote_resume_state(self, task: Task, dst_site: SiteConfig) -> tuple[int, bool]:
+        engine = SftpEngine(dst_site, self.logger)
+        try:
+            engine.connect()
+            try:
+                remote_stat = engine.stat(task.dst)
+            except SSHFerryError as exc:
+                if exc.code == ErrorCode.PATH_NOT_FOUND:
+                    return 0, False
+                raise
+            remote_size = max(0, remote_stat.size)
+            if remote_size == task.bytes_total and task.bytes_total > 0 and task.bytes_done > 0:
+                self.logger.info(
+                    "remote_resume_state task=%s dst=%s remote_size=%s action=skip_complete",
+                    task.task_id[:8],
+                    task.dst,
+                    remote_size,
+                )
+                return task.bytes_total, True
+            if task.bytes_done <= 0:
+                if remote_size > 0:
+                    self.logger.info(
+                        "remote_resume_state task=%s dst=%s remote_size=%s action=ignore_no_local_progress",
+                        task.task_id[:8],
+                        task.dst,
+                        remote_size,
+                    )
+                return 0, False
+            if 0 < remote_size < task.bytes_total:
+                with self.task_lock:
+                    task.bytes_done = min(task.bytes_total, remote_size)
+                self.logger.info(
+                    "remote_resume_state task=%s dst=%s remote_size=%s action=resume_partial",
+                    task.task_id[:8],
+                    task.dst,
+                    remote_size,
+                )
+                return remote_size, False
+            if remote_size == task.bytes_total and task.bytes_done >= task.bytes_total:
+                self.logger.info(
+                    "remote_resume_state task=%s dst=%s remote_size=%s action=resume_complete",
+                    task.task_id[:8],
+                    task.dst,
+                    remote_size,
+                )
+                return task.bytes_total, True
+            self.logger.info(
+                "remote_resume_state task=%s dst=%s remote_size=%s bytes_done=%s action=restart_from_zero",
+                task.task_id[:8],
+                task.dst,
+                remote_size,
+                task.bytes_done,
+            )
+            return 0, False
+        finally:
+            engine.disconnect()
 
     @staticmethod
     def create_upload_task(

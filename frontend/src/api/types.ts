@@ -1,6 +1,6 @@
 export type AuthMethod = 'password' | 'key';
 export type TransferProtocol = 'sftp' | 'scp';
-export type TaskEngine = 'auto' | 'sftp' | 'scp' | 'parallel';
+export type TaskEngine = 'auto' | 'sftp' | 'scp' | 'parallel' | 'dualpath';
 export type ProtocolOverride = 'auto' | 'sftp' | 'scp';
 export type TaskStatus =
   | 'pending'

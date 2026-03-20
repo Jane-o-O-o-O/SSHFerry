@@ -23,6 +23,7 @@ class FakeScheduler:
         self.active_task_ids: set[str] = set()
         self.futures: dict[str, object] = {}
         self.parallel_threshold = 50 * 1024 * 1024
+        self.remote_dualpath_threshold = 128 * 1024 * 1024
 
     def add_task(self, task: Task) -> str:
         with self.task_lock:
@@ -257,6 +258,39 @@ def test_remote_copy_endpoint_creates_remote_to_remote_task(monkeypatch):
     assert body['dst_display_name'] == 'backup'
     assert body['engine'] == 'sftp'
     assert body['bytes_total'] == 9
+
+
+def test_remote_copy_endpoint_prefers_dualpath_for_large_file(monkeypatch):
+    class FakeEngine:
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def stat(self, path):
+            assert path == '/remote/big.bin'
+            return SimpleNamespace(name='big.bin', path=path, is_dir=False, size=200 * 1024 * 1024, mtime=1.0, mode=None)
+
+    monkeypatch.setattr(TaskService, '_build_remote_engine', staticmethod(lambda _site: FakeEngine()))
+    state = FakeAppState(remote_sessions={'src-1': REMOTE_SITE, 'dst-1': REMOTE_SITE_B})
+
+    with _build_test_client(state) as client:
+        response = client.post(
+            '/api/tasks/remote-copy',
+            json={
+                'src_session_id': 'src-1',
+                'dst_session_id': 'dst-1',
+                'src_path': '/remote/big.bin',
+                'dst_path': '/backup/big.bin',
+                'engine': 'auto',
+            },
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body['engine'] == 'dualpath'
+    assert body['bytes_total'] == 200 * 1024 * 1024
 
 
 def test_task_control_and_clear_finished_routes():

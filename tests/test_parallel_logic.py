@@ -138,3 +138,81 @@ def test_parallel_download(tmp_path, mock_sftp_engine):
     
     # Verify
     assert local_path.read_bytes() == expected_data
+
+
+def test_parallel_engine_warmup_starts_gradually(monkeypatch):
+    config = SiteConfig(
+        name="test",
+        host="mock",
+        port=22,
+        username="user",
+        auth_method="password",
+        remote_root="/"
+    )
+    engine = ParallelSftpEngine(config, max_workers=4, chunk_size=1024 * 1024)
+    engine.initial_workers = 1
+    engine.worker_ramp_step = 1
+    engine.warmup_delay_seconds = 0.01
+
+    submitted: list[int] = []
+    sleeps: list[float] = []
+
+    class FakeExecutor:
+        def submit(self, worker):
+            submitted.append(len(submitted) + 1)
+            return MagicMock()
+
+    lock = threading.Lock()
+
+    monkeypatch.setattr("src.engines.parallel_sftp_engine.time.sleep", lambda value: sleeps.append(value))
+
+    futures = engine._launch_workers_adaptively(
+        FakeExecutor(),
+        lambda: None,
+        4,
+        lock,
+        lambda: 0,
+    )
+
+    assert len(futures) == 4
+    assert submitted == [1, 2, 3, 4]
+    assert len(sleeps) == 3
+
+
+def test_parallel_download_worker_does_not_log_paused_interrupt(tmp_path, monkeypatch):
+    remote_path = "/remote/download.bin"
+    expected_data = os.urandom(2 * 1024 * 1024)
+    mock_data_store[remote_path] = expected_data
+
+    class MockSftpEngine:
+        def __init__(self, *args, **kwargs):
+            self.sftp_client = MockSftpClient(mock_data_store)
+
+        def connect(self):
+            pass
+
+        def disconnect(self):
+            pass
+
+        def stat(self, path):
+            mock_stat = MagicMock()
+            mock_stat.size = len(mock_data_store.get(path, b""))
+            return mock_stat
+
+    monkeypatch.setattr("src.engines.parallel_sftp_engine.SftpEngine", MockSftpEngine)
+
+    config = SiteConfig(
+        name="test",
+        host="mock",
+        port=22,
+        username="user",
+        auth_method="password",
+        remote_root="/"
+    )
+    logger = MagicMock()
+    engine = ParallelSftpEngine(config, logger=logger, max_workers=2, chunk_size=1024 * 1024)
+
+    with pytest.raises(InterruptedError):
+        engine.download_file(remote_path, str(tmp_path / "dl.bin"), check_interrupt=lambda: (_ for _ in ()).throw(InterruptedError("Task paused")))
+
+    logger.error.assert_not_called()

@@ -74,16 +74,18 @@ class ParallelSftpEngine:
         preset = PARALLEL_PRESETS.get(preset_name or "", PARALLEL_PRESETS["medium"])
         self.max_workers = max_workers if max_workers is not None else preset.workers
         self.chunk_size = chunk_size if chunk_size is not None else preset.chunk_size
-        self.min_workers = 2
-        self.warmup_batch_size = 4
-        self.warmup_delay_seconds = 0.08
+        self.min_workers = 1
+        self.initial_workers = 1
+        self.worker_ramp_step = 1
+        self.warmup_delay_seconds = 0.3
         self.connect_retries = 3
         self.connect_backoff_seconds = 0.4
-        self.degrade_after_failures = 2
+        self.degrade_after_failures = 1
         self.max_chunk_retries = 4
         self.max_workers = _env_int("SSHFERRY_PARALLEL_WORKERS", self.max_workers, 1)
         self.chunk_size = _env_int("SSHFERRY_PARALLEL_CHUNK_BYTES", self.chunk_size, 64 * 1024)
-        self.warmup_batch_size = _env_int("SSHFERRY_PARALLEL_WARMUP_BATCH", self.warmup_batch_size, 1)
+        self.initial_workers = _env_int("SSHFERRY_PARALLEL_INITIAL_WORKERS", self.initial_workers, 1)
+        self.worker_ramp_step = _env_int("SSHFERRY_PARALLEL_RAMP_STEP", self.worker_ramp_step, 1)
         self.warmup_delay_seconds = _env_float(
             "SSHFERRY_PARALLEL_WARMUP_DELAY",
             self.warmup_delay_seconds,
@@ -93,6 +95,11 @@ class ParallelSftpEngine:
             "SSHFERRY_PARALLEL_MAX_CHUNK_RETRIES",
             self.max_chunk_retries,
             0,
+        )
+        self.progress_report_bytes = _env_int(
+            "SSHFERRY_PARALLEL_PROGRESS_REPORT_BYTES",
+            1024 * 1024,
+            64 * 1024,
         )
         self.host_key = f"{site_config.username}@{site_config.host}:{site_config.port}"
 
@@ -115,6 +122,33 @@ class ParallelSftpEngine:
         with self._host_cap_lock:
             cap = self._host_worker_caps.get(self.host_key, self.max_workers)
         return min(self.max_workers, cap, max(1, num_chunks))
+
+    def _launch_workers_adaptively(self, executor: ThreadPoolExecutor, worker_loop, worker_count: int, lock: threading.Lock, connect_failures_getter) -> list:
+        futures = []
+        target_workers = worker_count
+        launched_workers = 0
+        current_goal = min(target_workers, max(1, self.initial_workers))
+        while launched_workers < target_workers:
+            while launched_workers < current_goal:
+                futures.append(executor.submit(worker_loop))
+                launched_workers += 1
+            if launched_workers >= target_workers:
+                break
+            time.sleep(self.warmup_delay_seconds)
+            with lock:
+                connect_failures = connect_failures_getter()
+                if connect_failures >= self.degrade_after_failures and target_workers > self.min_workers:
+                    target_workers = self._degrade_host_worker_cap(target_workers)
+                    current_goal = min(target_workers, max(self.min_workers, launched_workers))
+                    self.logger.warning(
+                        "Adaptive parallel warmup throttled host=%s target_workers=%s failures=%s",
+                        self.host_key,
+                        target_workers,
+                        connect_failures,
+                    )
+                    continue
+            current_goal = min(target_workers, current_goal + self.worker_ramp_step)
+        return futures
 
     def _degrade_host_worker_cap(self, current_target: int) -> int:
         """Lower host-level worker cap after repeated connect failures."""
@@ -233,32 +267,37 @@ class ParallelSftpEngine:
                                 return
 
                             try:
-                                f.seek(offset)
-                                data = f.read(length)
-                                if len(data) != length:
-                                    raise IOError(
-                                        f"Local chunk read size mismatch at offset {offset}: "
-                                        f"expected {length}, got {len(data)}"
-                                    )
                                 rf.seek(offset)
-                                rf.write(data)
-
-                                report_now = False
-                                report_value = 0
+                                f.seek(offset)
+                                remaining = length
+                                local_written = 0
+                                while remaining > 0:
+                                    block = min(self.progress_report_bytes, remaining)
+                                    data = f.read(block)
+                                    if len(data) != block:
+                                        raise IOError(
+                                            f"Local chunk read size mismatch at offset {offset + local_written}: "
+                                            f"expected {block}, got {len(data)}"
+                                        )
+                                    rf.write(data)
+                                    local_written += len(data)
+                                    remaining -= len(data)
+                                    report_now = False
+                                    report_value = 0
+                                    with lock:
+                                        nonlocal bytes_transferred, last_reported, completed_chunks
+                                        bytes_transferred += len(data)
+                                        if callback and (
+                                            bytes_transferred == file_size
+                                            or bytes_transferred - last_reported >= self.progress_report_bytes
+                                        ):
+                                            last_reported = bytes_transferred
+                                            report_now = True
+                                            report_value = bytes_transferred
+                                    if report_now:
+                                        callback(report_value, file_size)
                                 with lock:
-                                    nonlocal bytes_transferred, last_reported, completed_chunks
-                                    written = len(data)
-                                    bytes_transferred += written
                                     completed_chunks += 1
-                                    if callback and (
-                                        bytes_transferred == file_size
-                                        or bytes_transferred - last_reported >= self.chunk_size
-                                    ):
-                                        last_reported = bytes_transferred
-                                        report_now = True
-                                        report_value = bytes_transferred
-                                if report_now:
-                                    callback(report_value, file_size)
                             except Exception as e:
                                 should_abort = False
                                 with lock:
@@ -281,25 +320,22 @@ class ParallelSftpEngine:
                             finally:
                                 queue.task_done()
 
+            except InterruptedError:
+                return
             except Exception as e:
                 self.logger.error(f"Upload worker failed: {e}")
             finally:
                 eng.disconnect()
 
         worker_count = self._get_effective_worker_count(num_chunks)
-        target_workers = worker_count
-        launched_workers = 0
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = []
-            while launched_workers < target_workers:
-                batch = min(self.warmup_batch_size, target_workers - launched_workers)
-                for _ in range(batch):
-                    futures.append(executor.submit(worker_loop))
-                    launched_workers += 1
-                time.sleep(self.warmup_delay_seconds)
-                with lock:
-                    if connect_failures >= self.degrade_after_failures and target_workers > self.min_workers:
-                        target_workers = self._degrade_host_worker_cap(target_workers)
+            futures = self._launch_workers_adaptively(
+                executor,
+                worker_loop,
+                worker_count,
+                lock,
+                lambda: connect_failures,
+            )
             wait(futures)
             
             # Check for errors
@@ -398,31 +434,36 @@ class ParallelSftpEngine:
 
                             try:
                                 rf.seek(offset)
-                                data = rf.read(length)
-                                if len(data) != length:
-                                    raise IOError(
-                                        f"Remote chunk read size mismatch at offset {offset}: "
-                                        f"expected {length}, got {len(data)}"
-                                    )
                                 f.seek(offset)
-                                f.write(data)
-
-                                report_now = False
-                                report_value = 0
+                                remaining = length
+                                local_read = 0
+                                while remaining > 0:
+                                    block = min(self.progress_report_bytes, remaining)
+                                    data = rf.read(block)
+                                    if len(data) != block:
+                                        raise IOError(
+                                            f"Remote chunk read size mismatch at offset {offset + local_read}: "
+                                            f"expected {block}, got {len(data)}"
+                                        )
+                                    f.write(data)
+                                    local_read += len(data)
+                                    remaining -= len(data)
+                                    report_now = False
+                                    report_value = 0
+                                    with lock:
+                                        nonlocal bytes_transferred, last_reported, completed_chunks
+                                        bytes_transferred += len(data)
+                                        if callback and (
+                                            bytes_transferred == file_size
+                                            or bytes_transferred - last_reported >= self.progress_report_bytes
+                                        ):
+                                            last_reported = bytes_transferred
+                                            report_now = True
+                                            report_value = bytes_transferred
+                                    if report_now:
+                                        callback(report_value, file_size)
                                 with lock:
-                                    nonlocal bytes_transferred, last_reported, completed_chunks
-                                    downloaded = len(data)
-                                    bytes_transferred += downloaded
                                     completed_chunks += 1
-                                    if callback and (
-                                        bytes_transferred == file_size
-                                        or bytes_transferred - last_reported >= self.chunk_size
-                                    ):
-                                        last_reported = bytes_transferred
-                                        report_now = True
-                                        report_value = bytes_transferred
-                                if report_now:
-                                    callback(report_value, file_size)
                             except Exception as e:
                                 should_abort = False
                                 with lock:
@@ -444,25 +485,22 @@ class ParallelSftpEngine:
                                 continue
                             finally:
                                 queue.task_done()
+            except InterruptedError:
+                return
             except Exception as e:
                 self.logger.error(f"Download worker failed: {e}")
             finally:
                 eng.disconnect()
 
         worker_count = self._get_effective_worker_count(num_chunks)
-        target_workers = worker_count
-        launched_workers = 0
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = []
-            while launched_workers < target_workers:
-                batch = min(self.warmup_batch_size, target_workers - launched_workers)
-                for _ in range(batch):
-                    futures.append(executor.submit(worker_loop))
-                    launched_workers += 1
-                time.sleep(self.warmup_delay_seconds)
-                with lock:
-                    if connect_failures >= self.degrade_after_failures and target_workers > self.min_workers:
-                        target_workers = self._degrade_host_worker_cap(target_workers)
+            futures = self._launch_workers_adaptively(
+                executor,
+                worker_loop,
+                worker_count,
+                lock,
+                lambda: connect_failures,
+            )
             wait(futures)
             
             if check_interrupt and check_interrupt():

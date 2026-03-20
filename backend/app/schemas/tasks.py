@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-TaskEngine = Literal['auto', 'sftp', 'scp', 'parallel']
+TaskEngine = Literal['auto', 'sftp', 'scp', 'parallel', 'dualpath']
 
 
 class TaskResponse(BaseModel):

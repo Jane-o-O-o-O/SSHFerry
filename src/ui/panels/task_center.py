@@ -41,6 +41,37 @@ class TaskCenterPanel(QWidget):
         self._last_signature: tuple = ()
         self._last_row_count = 0
         self._refresh_count = 0
+        self._column_widths = {
+            0: 38,
+            1: 72,
+            2: 108,
+            3: 92,
+            4: 170,
+            5: 96,
+            6: 280,
+            7: 360,
+        }
+        self._column_min_widths = {
+            0: 38,
+            1: 72,
+            2: 90,
+            3: 92,
+            4: 170,
+            5: 96,
+            6: 220,
+            7: 320,
+        }
+        self._column_max_widths = {
+            0: 48,
+            1: 120,
+            2: 180,
+            3: 120,
+            4: 260,
+            5: 140,
+            6: 520,
+            7: 900,
+        }
+        self._resizing_header = False
         self._init_ui()
 
     def _init_ui(self):
@@ -73,16 +104,14 @@ class TaskCenterPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         header = self.table.horizontalHeader()
-        header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.Interactive)
-        self.table.setColumnWidth(6, 320)
+        header.setStretchLastSection(False)
+        header.setSectionsMovable(False)
+        header.sectionResized.connect(self._on_header_section_resized)
+        for column, width in self._column_widths.items():
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+            self.table.setColumnWidth(column, width)
         self.table.verticalHeader().setVisible(False)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.cellChanged.connect(self._on_cell_changed)
@@ -158,7 +187,7 @@ class TaskCenterPanel(QWidget):
                 task.task_id,
                 task.status,
                 int(task.progress_percent * 10),
-                int(task.speed),
+                int(task.speed / (128 * 1024)),
                 task.subtask_done,
                 task.subtask_count,
                 task.current_file,
@@ -175,10 +204,10 @@ class TaskCenterPanel(QWidget):
         self.table.setRowCount(len(visible_tasks))
 
         for row, task in enumerate(visible_tasks):
+            self.table.setCellWidget(row, 0, self._build_checkbox_cell(task.task_id, task.task_id in checked_task_ids))
             check_item = QTableWidgetItem()
-            check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            check_item.setCheckState(Qt.Checked if task.task_id in checked_task_ids else Qt.Unchecked)
             check_item.setData(Qt.UserRole, task.task_id)
+            check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(row, 0, check_item)
 
             self.table.setItem(row, 1, QTableWidgetItem(task.task_id[:8]))
@@ -205,12 +234,19 @@ class TaskCenterPanel(QWidget):
 
             speed_text = ""
             if task.status == "running" and task.speed > 0:
-                speed_text = f"{task.speed / (1024 * 1024):.2f} MB/s"
-            elif task.is_finished and task.start_time:
-                end_t = task.end_time or time.time()
-                elapsed = end_t - task.start_time
-                if elapsed > 0 and task.bytes_done > 0:
-                    speed_text = f"~{task.bytes_done / elapsed / (1024 * 1024):.2f} MB/s"
+                speed_text = f"{task.speed / (1024 * 1024):.1f} MB/s"
+            elif task.status == "running":
+                avg_speed = self._running_avg_speed(task)
+                speed_text = f"~{avg_speed / (1024 * 1024):.1f} MB/s" if avg_speed > 0 else "0.0 MB/s"
+            elif task.is_finished and (task.avg_speed > 0 or task.start_time):
+                avg_speed = task.avg_speed
+                if avg_speed <= 0 and task.start_time:
+                    end_t = task.end_time or time.time()
+                    elapsed = end_t - task.start_time
+                    if elapsed > 0 and task.bytes_done > 0:
+                        avg_speed = task.bytes_done / elapsed
+                if avg_speed > 0:
+                    speed_text = f"~{avg_speed / (1024 * 1024):.1f} MB/s"
             speed_item = QTableWidgetItem(speed_text)
             speed_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.table.setItem(row, 5, speed_item)
@@ -228,9 +264,8 @@ class TaskCenterPanel(QWidget):
 
         self.table.blockSignals(False)
         self.table.setUpdatesEnabled(True)
-        if self._last_row_count != len(visible_tasks) or (self._refresh_count % 15 == 0):
-            self.table.resizeColumnsToContents()
-            self._last_row_count = len(visible_tasks)
+        self._last_row_count = len(visible_tasks)
+        self._rebalance_destination_width()
         self._update_button_states()
 
     def _update_button_states(self, selected_task_id: Optional[str] = None):
@@ -274,9 +309,9 @@ class TaskCenterPanel(QWidget):
     def get_checked_task_ids(self) -> list[str]:
         ids: list[str] = []
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            if item and item.checkState() == Qt.Checked:
-                task_id = item.data(Qt.UserRole)
+            checkbox = self._checkbox_for_row(row)
+            if checkbox and checkbox.isChecked():
+                task_id = checkbox.property("task_id")
                 if task_id:
                     ids.append(task_id)
         return ids
@@ -286,13 +321,12 @@ class TaskCenterPanel(QWidget):
             self._update_button_states()
 
     def _on_select_all_toggled(self, checked: bool):
-        self.table.blockSignals(True)
-        state = Qt.Checked if checked else Qt.Unchecked
         for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            if item:
-                item.setCheckState(state)
-        self.table.blockSignals(False)
+            checkbox = self._checkbox_for_row(row)
+            if checkbox:
+                checkbox.blockSignals(True)
+                checkbox.setChecked(checked)
+                checkbox.blockSignals(False)
         self._update_button_states()
 
     def get_selected_task_id(self) -> Optional[str]:
@@ -304,6 +338,10 @@ class TaskCenterPanel(QWidget):
         if id_item:
             return id_item.data(Qt.UserRole)
         return None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._rebalance_destination_width()
 
     def _on_selection_changed(self):
         self._update_button_states()
@@ -333,6 +371,77 @@ class TaskCenterPanel(QWidget):
             return ids
         selected_id = self.get_selected_task_id()
         return [selected_id] if selected_id else []
+
+    def _build_checkbox_cell(self, task_id: str, checked: bool) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignCenter)
+        checkbox = QCheckBox()
+        checkbox.setObjectName("taskRowCheckbox")
+        checkbox.setProperty("task_id", task_id)
+        checkbox.setChecked(checked)
+        checkbox.toggled.connect(lambda _state: self._update_button_states())
+        layout.addWidget(checkbox)
+        return container
+
+    def _checkbox_for_row(self, row: int) -> Optional[QCheckBox]:
+        widget = self.table.cellWidget(row, 0)
+        if not widget:
+            return None
+        return widget.findChild(QCheckBox, "taskRowCheckbox")
+
+    def _on_header_section_resized(self, logical_index: int, _old_size: int, new_size: int) -> None:
+        if self._resizing_header:
+            return
+        clamped_size = self._clamped_column_width(logical_index, new_size)
+        self._resizing_header = True
+        try:
+            if clamped_size != new_size:
+                self.table.setColumnWidth(logical_index, clamped_size)
+            self._column_widths[logical_index] = clamped_size
+            if logical_index != 7:
+                self._rebalance_destination_width()
+        finally:
+            self._resizing_header = False
+
+    def _rebalance_destination_width(self) -> None:
+        if self.table.columnCount() < 8:
+            return
+        viewport_width = self.table.viewport().width()
+        if viewport_width <= 0:
+            return
+        occupied = sum(self.table.columnWidth(index) for index in range(7))
+        destination_width = max(
+            self._column_min_widths.get(7, 320),
+            min(self._column_max_widths.get(7, 900), max(self._column_widths.get(7, 360), viewport_width - occupied - 4)),
+        )
+        self.table.setColumnWidth(7, destination_width)
+        self._column_widths[7] = destination_width
+
+    def _clamped_column_width(self, logical_index: int, proposed_size: int) -> int:
+        min_width = self._column_min_widths.get(logical_index, 60)
+        max_width = self._column_max_widths.get(logical_index, 900)
+        proposed = max(min_width, min(max_width, proposed_size))
+        if logical_index == 7:
+            return proposed
+        viewport_width = self.table.viewport().width()
+        if viewport_width <= 0:
+            return proposed
+        other_min_total = sum(
+            self._column_min_widths.get(index, 60)
+            for index in range(self.table.columnCount())
+            if index != logical_index
+        )
+        max_allowed = max(min_width, viewport_width - other_min_total - 4)
+        return min(proposed, max_allowed)
+
+    @staticmethod
+    def _running_avg_speed(task: Task) -> float:
+        if not task.start_time or task.bytes_done <= 0:
+            return 0.0
+        elapsed = max(0.001, time.time() - task.start_time)
+        return task.bytes_done / elapsed
 
     @staticmethod
     def _format_size(size: int) -> str:

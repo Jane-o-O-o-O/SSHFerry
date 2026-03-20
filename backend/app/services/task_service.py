@@ -21,6 +21,7 @@ from src.shared.models import SiteConfig, Task
 
 
 DEFAULT_PARALLEL_THRESHOLD_BYTES = 50 * 1024 * 1024
+DEFAULT_REMOTE_DUALPATH_THRESHOLD_BYTES = 128 * 1024 * 1024
 
 
 class TaskService:
@@ -155,13 +156,14 @@ class TaskService:
                     status='pending',
                 )
             else:
+                file_size = int(remote_entry.size)
                 task = Task(
                     task_id=str(uuid.uuid4()),
                     kind='file_transfer',
-                    engine=self._resolve_remote_copy_engine(payload.engine),
+                    engine=self._resolve_remote_copy_engine(payload.engine, file_size, scheduler),
                     src=src_path,
                     dst=dst_path,
-                    bytes_total=int(remote_entry.size),
+                    bytes_total=file_size,
                     src_endpoint_type='remote',
                     dst_endpoint_type='remote',
                     src_session_id=payload.src_session_id,
@@ -288,15 +290,22 @@ class TaskService:
         return base_protocol
 
     @staticmethod
-    def _resolve_remote_copy_engine(requested_engine: str) -> str:
-        if requested_engine in ('sftp', 'scp', 'parallel'):
+    def _resolve_remote_copy_engine(requested_engine: str, file_size: int, scheduler: Any) -> str:
+        if requested_engine in ('sftp', 'scp', 'parallel', 'dualpath'):
             return requested_engine
+        if file_size >= TaskService._remote_dualpath_threshold(scheduler):
+            return 'dualpath'
         return 'sftp'
 
     @staticmethod
     def _parallel_threshold(scheduler: Any) -> int:
         threshold = getattr(scheduler, 'parallel_threshold', DEFAULT_PARALLEL_THRESHOLD_BYTES)
         return int(threshold) if isinstance(threshold, int) else DEFAULT_PARALLEL_THRESHOLD_BYTES
+
+    @staticmethod
+    def _remote_dualpath_threshold(scheduler: Any) -> int:
+        threshold = getattr(scheduler, 'remote_dualpath_threshold', DEFAULT_REMOTE_DUALPATH_THRESHOLD_BYTES)
+        return int(threshold) if isinstance(threshold, int) else DEFAULT_REMOTE_DUALPATH_THRESHOLD_BYTES
 
     @staticmethod
     def _scan_local_dir(path: Path) -> tuple[int, int]:

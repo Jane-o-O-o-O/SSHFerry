@@ -1,4 +1,5 @@
 """Data models for SSHFerry."""
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Literal, Optional
@@ -89,7 +90,7 @@ class Task:
 
     task_id: str
     kind: str  # "file_transfer", "folder_transfer", "delete", "mkdir", "rename"
-    engine: str  # "sftp", "parallel", or "scp"
+    engine: str  # "sftp", "parallel", "scp", or "dualpath"
     src: str
     dst: str
     bytes_total: int
@@ -111,6 +112,7 @@ class Task:
     start_time: Optional[float] = None  # Unix timestamp when task started
     end_time: Optional[float] = None    # Unix timestamp when task finished
     speed: float = 0.0  # Current transfer speed in bytes/sec
+    avg_speed: float = 0.0  # Final average transfer speed in bytes/sec
     interrupted: bool = False  # Flag for graceful interruption
     paused: bool = False  # Flag for graceful pause (used by scheduler)
     skipped: bool = False  # File already exists and is complete
@@ -119,6 +121,7 @@ class Task:
     subtask_count: int = 0  # Total number of files in folder
     subtask_done: int = 0   # Number of completed files
     current_file: str = ""  # Currently processing file name
+    speed_samples: deque[tuple[float, int]] = field(default_factory=deque, repr=False)
 
     @property
     def progress_percent(self) -> float:
