@@ -50,6 +50,12 @@ export interface AuthLoginRequest {
   password: string;
 }
 
+export interface AuthSignupRequest {
+  username: string;
+  password: string;
+  display_name?: string | null;
+}
+
 export interface SiteUpsertRequest {
   name: string;
   host: string;

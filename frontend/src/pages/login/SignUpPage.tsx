@@ -1,23 +1,24 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
-import { getHealth, login } from '../../api/auth';
+import { getHealth, signup } from '../../api/auth';
 import { getErrorMessage } from '../../api/http';
 import { useI18n } from '../../i18n';
 import { useAuthStore } from '../../store/auth';
 
-export function LoginPage() {
+export function SignUpPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const status = useAuthStore((state) => state.status);
   const health = useAuthStore((state) => state.health);
-  const authNotice = useAuthStore((state) => state.authNotice);
   const setAuthenticated = useAuthStore((state) => state.setAuthenticated);
   const clearAuthNotice = useAuthStore((state) => state.clearAuthNotice);
   const { language, setLanguage, t } = useI18n();
 
   const [username, setUsername] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -34,16 +35,20 @@ export function LoginPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (password !== confirmPassword) {
+      setFormError(t('signup.passwordMismatch'));
+      return;
+    }
     setSubmitting(true);
     setFormError(null);
     try {
-      const user = await login({ username, password });
+      const user = await signup({ username, password, display_name: displayName || null });
       const latestHealth = health ?? (await getHealth());
       setAuthenticated({ health: latestHealth, user });
       clearAuthNotice();
       navigate(redirectTarget, { replace: true });
     } catch (error) {
-      setFormError(getErrorMessage(error, t('auth.loginFailed')));
+      setFormError(getErrorMessage(error, t('signup.failed')));
     } finally {
       setSubmitting(false);
     }
@@ -63,27 +68,34 @@ export function LoginPage() {
             </button>
           </div>
         </div>
-        <h1>{t('login.title')}</h1>
-        <p>{t('login.description')}</p>
-        {authNotice ? <div className="login-notice">{authNotice}</div> : null}
+        <h1>{t('signup.title')}</h1>
+        <p>{t('signup.description')}</p>
         {formError ? <div className="bootstrap-error login-error">{formError}</div> : null}
         <form className="login-form" onSubmit={handleSubmit}>
           <label className="form-field">
-            <span>{t('login.username')}</span>
-            <input autoComplete="username" name="username" placeholder={t('login.usernamePlaceholder')} value={username} onChange={(event) => setUsername(event.target.value)} />
+            <span>{t('signup.username')}</span>
+            <input autoComplete="username" name="username" placeholder={t('signup.usernamePlaceholder')} value={username} onChange={(event) => setUsername(event.target.value)} />
           </label>
           <label className="form-field">
-            <span>{t('login.password')}</span>
-            <input autoComplete="current-password" name="password" type="password" placeholder={t('login.passwordPlaceholder')} value={password} onChange={(event) => setPassword(event.target.value)} />
+            <span>{t('signup.displayName')}</span>
+            <input autoComplete="nickname" name="displayName" placeholder={t('signup.displayNamePlaceholder')} value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+          </label>
+          <label className="form-field">
+            <span>{t('signup.password')}</span>
+            <input autoComplete="new-password" name="password" type="password" placeholder={t('signup.passwordPlaceholder')} value={password} onChange={(event) => setPassword(event.target.value)} />
+          </label>
+          <label className="form-field">
+            <span>{t('signup.confirmPassword')}</span>
+            <input autoComplete="new-password" name="confirmPassword" type="password" placeholder={t('signup.confirmPasswordPlaceholder')} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
           </label>
           <div className="login-actions">
             <button type="submit" className="primary-button" disabled={submitting}>
-              {submitting ? t('login.submitting') : t('login.submit')}
+              {submitting ? t('signup.submitting') : t('signup.submit')}
             </button>
           </div>
         </form>
         <p>
-          {t('login.switchPrompt')} <Link to="/signup">{t('login.switchAction')}</Link>
+          {t('signup.switchPrompt')} <Link to="/login">{t('signup.switchAction')}</Link>
         </p>
       </section>
     </main>

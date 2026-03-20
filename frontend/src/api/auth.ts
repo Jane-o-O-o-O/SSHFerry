@@ -1,4 +1,4 @@
-import type { AuthLoginRequest, AuthSessionResponse, AuthUserResponse, HealthResponse } from './types';
+import type { AuthLoginRequest, AuthSessionResponse, AuthSignupRequest, AuthUserResponse, HealthResponse } from './types';
 import { baseHttp } from './http';
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -8,6 +8,11 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export async function getCurrentUser(): Promise<AuthUserResponse> {
   const { data } = await baseHttp.get<AuthUserResponse>('/api/auth/me');
+  return data;
+}
+
+export async function signup(payload: AuthSignupRequest): Promise<AuthUserResponse> {
+  const { data } = await baseHttp.post<AuthUserResponse>('/api/auth/signup', payload);
   return data;
 }
 

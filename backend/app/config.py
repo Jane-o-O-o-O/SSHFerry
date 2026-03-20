@@ -68,6 +68,7 @@ class RuntimeSettings:
     workspace_root: Path
     public_base_url: str | None
     owner_file: Path
+    users_file: Path
     owner_username: str | None
     owner_display_name: str | None
     owner_password: str | None
@@ -112,6 +113,8 @@ def build_runtime_settings() -> RuntimeSettings:
 
     owner_file_raw = os.getenv('SSHFERRY_OWNER_FILE', '').strip()
     owner_file = Path(owner_file_raw).expanduser() if owner_file_raw else Path.cwd() / '.backend_runtime' / 'auth' / 'owner.json'
+    users_file_raw = os.getenv('SSHFERRY_USERS_FILE', '').strip()
+    users_file = Path(users_file_raw).expanduser() if users_file_raw else owner_file.parent / 'users.json'
 
     cookie_secure_default = False
     if public_origin:
@@ -138,6 +141,7 @@ def build_runtime_settings() -> RuntimeSettings:
         workspace_root=workspace_root,
         public_base_url=public_base_url,
         owner_file=owner_file,
+        users_file=users_file,
         owner_username=os.getenv('SSHFERRY_OWNER_USERNAME', '').strip() or None,
         owner_display_name=os.getenv('SSHFERRY_OWNER_DISPLAY_NAME', '').strip() or None,
         owner_password=os.getenv('SSHFERRY_OWNER_PASSWORD', '') or None,

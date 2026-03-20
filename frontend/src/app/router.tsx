@@ -5,6 +5,7 @@ import { ProtectedRoute } from '../components/auth/ProtectedRoute';
 import { BootstrapPage } from '../pages/bootstrap/BootstrapPage';
 import { RouteErrorPage } from '../pages/error/RouteErrorPage';
 import { LoginPage } from '../pages/login/LoginPage';
+import { SignUpPage } from '../pages/login/SignUpPage';
 import { LogsPage } from '../pages/logs/LogsPage';
 import { ActivityPage } from '../pages/activity/ActivityPage';
 import { TasksPage } from '../pages/tasks/TasksPage';
@@ -19,6 +20,11 @@ export const router = createBrowserRouter([
   {
     path: '/login',
     element: <LoginPage />,
+    errorElement: <RouteErrorPage />,
+  },
+  {
+    path: '/signup',
+    element: <SignUpPage />,
     errorElement: <RouteErrorPage />,
   },
   {
