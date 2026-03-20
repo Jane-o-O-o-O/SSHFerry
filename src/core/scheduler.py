@@ -3,6 +3,9 @@ from collections import defaultdict
 from dataclasses import replace
 import logging
 import os
+import shlex
+import tarfile
+import tempfile
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -97,6 +100,10 @@ class TaskScheduler:
         )
         self.folder_file_workers = _env_int("SSHFERRY_FOLDER_FILE_WORKERS", 3, 1)
         self.folder_parallel_file_slots = _env_int("SSHFERRY_FOLDER_PARALLEL_FILE_SLOTS", 1, 1)
+        self.folder_bundle_enabled = os.getenv("SSHFERRY_FOLDER_ARCHIVE_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+        self.folder_bundle_file_count_threshold = _env_int("SSHFERRY_FOLDER_ARCHIVE_FILE_COUNT_THRESHOLD", 32, 1)
+        self.folder_bundle_max_bytes = _env_int("SSHFERRY_FOLDER_ARCHIVE_MAX_BYTES", 128 * 1024 * 1024, 1024 * 1024)
+        self.folder_bundle_max_files = _env_int("SSHFERRY_FOLDER_ARCHIVE_MAX_FILES", 256, 1)
         self.logger = logger or logging.getLogger(__name__)
 
         self.tasks: Dict[str, Task] = {}
@@ -990,12 +997,35 @@ class TaskScheduler:
         file_items = self._scan_local_folder_tree(local_dir, remote_dir)
         self._ensure_remote_directories(engine, [remote_dir, *[item[1] for item in file_items if item[2]]])
         files = [item for item in file_items if not item[2]]
+        file_plans = self._build_local_folder_file_plans(files, local_dir, direction="upload")
+        mixed_plan = self._build_local_folder_mixed_plan(file_plans)
+        if self._should_use_local_folder_mixed_transfer(mixed_plan):
+            self._run_local_folder_transfer_mixed(
+                task,
+                mixed_plan,
+                direction="upload",
+                local_root=local_dir,
+                remote_root=remote_dir,
+                probe_engine=engine,
+            )
+            return
         self._run_local_folder_transfer_workers(task, files, direction="upload", probe_engine=engine)
 
     def _execute_folder_download_parallelized(self, engine: SftpEngine, task: Task, remote_dir: str, local_dir: str) -> None:
         file_items = self._scan_remote_folder_tree(engine, remote_dir, local_dir)
         self._ensure_local_directories([local_dir, *[item[1] for item in file_items if item[2]]])
         files = [item for item in file_items if not item[2]]
+        file_plans = self._build_local_folder_file_plans(files, local_dir, direction="download")
+        mixed_plan = self._build_local_folder_mixed_plan(file_plans)
+        if self._should_use_local_folder_mixed_transfer(mixed_plan):
+            self._run_local_folder_transfer_mixed(
+                task,
+                mixed_plan,
+                direction="download",
+                local_root=local_dir,
+                remote_root=remote_dir,
+            )
+            return
         self._run_local_folder_transfer_workers(task, files, direction="download")
 
     def _scan_local_folder_tree(self, local_dir: str, remote_dir: str) -> list[tuple[str, str, bool, int]]:
@@ -1041,6 +1071,249 @@ class TaskScheduler:
     def _ensure_local_directories(directories: list[str]) -> None:
         for directory in sorted(set(directories), key=lambda value: (value.count(os.sep), value)):
             os.makedirs(directory, exist_ok=True)
+
+    def _build_local_folder_file_plans(
+        self,
+        files: list[tuple[str, str, bool, int]],
+        local_root: str,
+        *,
+        direction: str,
+    ) -> list[dict[str, object]]:
+        plans: list[dict[str, object]] = []
+        for src_path, dst_path, _is_dir, size in files:
+            local_path = src_path if direction == "upload" else dst_path
+            rel_path = os.path.relpath(local_path, local_root).replace(os.sep, "/")
+            plans.append(
+                {
+                    "src": src_path,
+                    "dst": dst_path,
+                    "size": size,
+                    "rel_path": rel_path,
+                    "tuple": (src_path, dst_path, False, size),
+                }
+            )
+        return plans
+
+    def _build_local_folder_mixed_plan(self, files: list[dict[str, object]]) -> dict[str, object]:
+        large_files: list[dict[str, object]] = []
+        small_files: list[dict[str, object]] = []
+        for item in files:
+            if int(item["size"]) >= self.parallel_threshold:
+                large_files.append(item)
+            else:
+                small_files.append(item)
+        batches: list[dict[str, object]] = []
+        current_files: list[dict[str, object]] = []
+        current_bytes = 0
+        batch_index = 0
+        for item in small_files:
+            item_size = int(item["size"])
+            if current_files and (
+                current_bytes + item_size > self.folder_bundle_max_bytes
+                or len(current_files) >= self.folder_bundle_max_files
+            ):
+                batches.append(
+                    {
+                        "bundle_id": f"bundle-{batch_index}",
+                        "files": current_files,
+                        "total_bytes": current_bytes,
+                    }
+                )
+                batch_index += 1
+                current_files = []
+                current_bytes = 0
+            current_files.append(item)
+            current_bytes += item_size
+        if current_files:
+            batches.append(
+                {
+                    "bundle_id": f"bundle-{batch_index}",
+                    "files": current_files,
+                    "total_bytes": current_bytes,
+                }
+            )
+        return {
+            "large_files": large_files,
+            "small_files": small_files,
+            "small_batches": batches,
+        }
+
+    def _should_use_local_folder_mixed_transfer(self, mixed_plan: dict[str, object]) -> bool:
+        if not self.folder_bundle_enabled:
+            return False
+        large_count = len(mixed_plan["large_files"])
+        small_count = len(mixed_plan["small_files"])
+        if large_count and small_count:
+            return True
+        if large_count:
+            return True
+        return small_count >= self.folder_bundle_file_count_threshold
+
+    def _run_local_folder_transfer_mixed(
+        self,
+        task: Task,
+        mixed_plan: dict[str, object],
+        *,
+        direction: str,
+        local_root: str,
+        remote_root: str,
+        probe_engine: Optional[SftpEngine] = None,
+    ) -> None:
+        large_files = [item["tuple"] for item in mixed_plan["large_files"]]
+        if large_files:
+            self._run_local_folder_transfer_workers(
+                task,
+                large_files,
+                direction=direction,
+                probe_engine=probe_engine,
+            )
+
+        small_files = mixed_plan["small_files"]
+        if not small_files:
+            return
+
+        site = self._require_site(
+            task.dst_site_snapshot if direction == "upload" else task.src_site_snapshot,
+            f"folder {direction} endpoint",
+        )
+        bundle_files, worker_files = self._partition_local_folder_small_files(
+            task,
+            site,
+            small_files,
+            direction=direction,
+            probe_engine=probe_engine,
+        )
+        if worker_files:
+            self._run_local_folder_transfer_workers(
+                task,
+                worker_files,
+                direction=direction,
+                probe_engine=probe_engine,
+            )
+        if not bundle_files:
+            return
+        try:
+            self._probe_remote_folder_bundle_support(site)
+        except SSHFerryError as exc:
+            self.logger.warning(
+                "folder_bundle_unavailable direction=%s root=%s reason=%s; falling back to per-file",
+                direction,
+                remote_root,
+                exc.message,
+            )
+            self._run_local_folder_transfer_workers(
+                task,
+                [item["tuple"] for item in bundle_files],
+                direction=direction,
+                probe_engine=probe_engine,
+            )
+            return
+
+        check_interrupt = self._interrupt_checker(task)
+        transferred: dict[str, int] = {}
+        progress_lock = Lock()
+        small_batches = list(self._build_local_folder_mixed_plan(bundle_files)["small_batches"])
+
+        def add_bundle_progress(bundle_key: str, label: str, absolute_done: int) -> None:
+            with self.task_lock, progress_lock:
+                previous = transferred.get(bundle_key, 0)
+                delta = max(0, absolute_done - previous)
+                transferred[bundle_key] = absolute_done
+                current_done = min(task.bytes_total, task.bytes_done + delta)
+                self._record_task_progress_locked(task, current_done, task.bytes_total)
+                task.current_file = label
+
+        def mark_bundle_complete(bundle_key: str, label: str, total_bytes: int, file_count: int) -> None:
+            with self.task_lock, progress_lock:
+                previous = transferred.get(bundle_key, 0)
+                if previous < total_bytes:
+                    task.bytes_done = min(task.bytes_total, task.bytes_done + (total_bytes - previous))
+                    task.speed_samples.append((time.time(), task.bytes_done))
+                    self._refresh_task_speed_locked(task)
+                    transferred[bundle_key] = total_bytes
+                task.subtask_done = min(task.subtask_count, task.subtask_done + file_count)
+                task.current_file = label
+
+        for batch_index, batch in enumerate(small_batches):
+            if check_interrupt():
+                raise InterruptedError("Task interrupted")
+            bundle_label = f"{len(batch['files'])} files"
+            bundle_key = str(batch["bundle_id"])
+            try:
+                if direction == "upload":
+                    self._transfer_folder_upload_bundle(
+                        task,
+                        site,
+                        local_root,
+                        remote_root,
+                        batch["files"],
+                        bundle_id=bundle_key,
+                        add_progress=lambda done, _label=bundle_label, _key=bundle_key: add_bundle_progress(_key, _label, done),
+                    )
+                else:
+                    self._transfer_folder_download_bundle(
+                        task,
+                        site,
+                        remote_root,
+                        local_root,
+                        batch["files"],
+                        bundle_id=bundle_key,
+                        add_progress=lambda done, _label=bundle_label, _key=bundle_key: add_bundle_progress(_key, _label, done),
+                    )
+                mark_bundle_complete(bundle_key, bundle_label, int(batch["total_bytes"]), len(batch["files"]))
+            except SSHFerryError as exc:
+                remaining_files = [item["tuple"] for item in batch["files"]]
+                for remaining in small_batches[batch_index + 1:]:
+                    remaining_files.extend(item["tuple"] for item in remaining["files"])
+                self.logger.warning(
+                    "folder_bundle_failed direction=%s root=%s bundle=%s reason=%s; falling back to per-file for remaining small files",
+                    direction,
+                    remote_root,
+                    bundle_key,
+                    exc.message,
+                )
+                self._run_local_folder_transfer_workers(
+                    task,
+                    remaining_files,
+                    direction=direction,
+                    probe_engine=probe_engine,
+                )
+                return
+
+    def _partition_local_folder_small_files(
+        self,
+        task: Task,
+        site: SiteConfig,
+        files: list[dict[str, object]],
+        *,
+        direction: str,
+        probe_engine: Optional[SftpEngine] = None,
+    ) -> tuple[list[dict[str, object]], list[tuple[str, str, bool, int]]]:
+        check_interrupt = self._interrupt_checker(task)
+        bundle_files: list[dict[str, object]] = []
+        worker_files: list[tuple[str, str, bool, int]] = []
+        inspector = None
+        should_disconnect = False
+        if direction == "upload":
+            inspector = probe_engine if probe_engine is not None and not hasattr(probe_engine, "connect") else SftpEngine(site, self.logger)
+            should_disconnect = inspector is not probe_engine
+            if should_disconnect:
+                inspector.connect()
+        try:
+            for item in files:
+                check_interrupt()
+                if direction == "upload":
+                    skip_file, offset = self._inspect_upload_target_state(inspector, str(item["dst"]), int(item["size"]))
+                else:
+                    skip_file, offset = self._inspect_download_target_state(str(item["dst"]), int(item["size"]))
+                if skip_file or offset > 0:
+                    worker_files.append(item["tuple"])
+                else:
+                    bundle_files.append(item)
+        finally:
+            if should_disconnect and inspector is not None:
+                inspector.disconnect()
+        return bundle_files, worker_files
 
     def _run_local_folder_transfer_workers(
         self,
@@ -1159,22 +1432,12 @@ class TaskScheduler:
         release_parallel_slot,
         probe_engine: Optional[SftpEngine] = None,
     ) -> None:
-        offset = 0
-        skip_file = False
         inspector = probe_engine if probe_engine is not None and not hasattr(probe_engine, "connect") else SftpEngine(site, self.logger)
         should_disconnect = inspector is not probe_engine
         if should_disconnect:
             inspector.connect()
         try:
-            try:
-                stats = inspector.stat(remote_path)
-                if stats.size == file_size:
-                    skip_file = True
-                elif stats.size < file_size:
-                    offset = stats.size
-            except SSHFerryError as exc:
-                if exc.code != ErrorCode.PATH_NOT_FOUND:
-                    raise
+            skip_file, offset = self._inspect_upload_target_state(inspector, remote_path, file_size)
         finally:
             if should_disconnect:
                 inspector.disconnect()
@@ -1224,14 +1487,7 @@ class TaskScheduler:
         acquire_parallel_slot,
         release_parallel_slot,
     ) -> None:
-        offset = 0
-        skip_file = False
-        if os.path.exists(local_path):
-            local_size = os.path.getsize(local_path)
-            if local_size == file_size:
-                skip_file = True
-            elif local_size < file_size:
-                offset = local_size
+        skip_file, offset = self._inspect_download_target_state(local_path, file_size)
         if skip_file:
             add_progress(file_key, file_size)
             mark_complete(file_key, file_size)
@@ -1264,6 +1520,166 @@ class TaskScheduler:
             finally:
                 engine.disconnect()
         mark_complete(file_key, file_size)
+
+    def _probe_remote_folder_bundle_support(self, site: SiteConfig) -> None:
+        engine = SftpEngine(site, self.logger)
+        try:
+            engine.connect()
+            if not getattr(engine, "ssh_client", None):
+                raise SSHFerryError(ErrorCode.TRANSFER_FAILED, "Remote shell unavailable")
+            exit_code, _std_out, std_err = self._exec_remote_shell(
+                engine,
+                "sh -lc 'command -v tar >/dev/null 2>&1'",
+            )
+            if exit_code != 0:
+                raise SSHFerryError(
+                    ErrorCode.TRANSFER_FAILED,
+                    std_err.strip() or "Remote tar command unavailable",
+                )
+        finally:
+            engine.disconnect()
+
+    @staticmethod
+    def _inspect_upload_target_state(engine: SftpEngine, remote_path: str, file_size: int) -> tuple[bool, int]:
+        skip_file = False
+        offset = 0
+        try:
+            stats = engine.stat(remote_path)
+            if stats.size == file_size:
+                skip_file = True
+            elif stats.size < file_size:
+                offset = stats.size
+        except SSHFerryError as exc:
+            if exc.code != ErrorCode.PATH_NOT_FOUND:
+                raise
+        return skip_file, offset
+
+    @staticmethod
+    def _inspect_download_target_state(local_path: str, file_size: int) -> tuple[bool, int]:
+        skip_file = False
+        offset = 0
+        if os.path.exists(local_path):
+            local_size = os.path.getsize(local_path)
+            if local_size == file_size:
+                skip_file = True
+            elif local_size < file_size:
+                offset = local_size
+        return skip_file, offset
+
+    def _transfer_folder_upload_bundle(
+        self,
+        task: Task,
+        site: SiteConfig,
+        local_dir: str,
+        remote_dir: str,
+        files: list[dict[str, object]],
+        *,
+        bundle_id: str,
+        add_progress,
+    ) -> None:
+        local_archive = None
+        remote_archive = f"{remote_dir.rstrip('/')}/.sshferry-bundle-{bundle_id}-{int(time.time() * 1000)}.tar"
+        check_interrupt = self._interrupt_checker(task)
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as temp_file:
+                local_archive = temp_file.name
+            with tarfile.open(local_archive, "w") as archive:
+                for item in files:
+                    check_interrupt()
+                    archive.add(str(item["src"]), arcname=str(item["rel_path"]))
+                    check_interrupt()
+            archive_size = max(1, os.path.getsize(local_archive))
+            total_bytes = max(0, sum(int(item["size"]) for item in files))
+            engine = SftpEngine(site, self.logger)
+            try:
+                engine.connect()
+                engine.upload_file(
+                    local_archive,
+                    remote_archive,
+                    callback=lambda done, _total: add_progress(min(total_bytes, int(done * total_bytes / archive_size))),
+                    check_interrupt=self._interrupt_checker(task),
+                )
+                extract_cmd = (
+                    "sh -lc "
+                    + shlex.quote(
+                        f"mkdir -p -- {shlex.quote(remote_dir)} && "
+                        f"tar -xf {shlex.quote(remote_archive)} -C {shlex.quote(remote_dir)} && "
+                        f"rm -f -- {shlex.quote(remote_archive)}"
+                    )
+                )
+                exit_code, _std_out, std_err = self._exec_remote_shell(engine, extract_cmd)
+                if exit_code != 0:
+                    raise SSHFerryError(ErrorCode.TRANSFER_FAILED, std_err.strip() or "Remote bundle extraction failed")
+            finally:
+                try:
+                    engine.remove_file(remote_archive)
+                except Exception:
+                    pass
+                engine.disconnect()
+        finally:
+            if local_archive and os.path.exists(local_archive):
+                os.remove(local_archive)
+
+    def _transfer_folder_download_bundle(
+        self,
+        task: Task,
+        site: SiteConfig,
+        remote_dir: str,
+        local_dir: str,
+        files: list[dict[str, object]],
+        *,
+        bundle_id: str,
+        add_progress,
+    ) -> None:
+        local_archive = None
+        remote_archive = f"{remote_dir.rstrip('/')}/.sshferry-bundle-{bundle_id}-{int(time.time() * 1000)}.tar"
+        rel_paths = " ".join(shlex.quote(str(item["rel_path"])) for item in files)
+        create_cmd = (
+            "sh -lc "
+            + shlex.quote(
+                f"cd {shlex.quote(remote_dir)} && tar -cf {shlex.quote(remote_archive)} -- {rel_paths}"
+            )
+        )
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as temp_file:
+                local_archive = temp_file.name
+            engine = SftpEngine(site, self.logger)
+            try:
+                engine.connect()
+                exit_code, _std_out, std_err = self._exec_remote_shell(engine, create_cmd)
+                if exit_code != 0:
+                    raise SSHFerryError(ErrorCode.TRANSFER_FAILED, std_err.strip() or "Remote bundle creation failed")
+                archive_size = max(1, engine.stat(remote_archive).size)
+                total_bytes = max(0, sum(int(item["size"]) for item in files))
+                engine.download_file(
+                    remote_archive,
+                    local_archive,
+                    callback=lambda done, _total: add_progress(min(total_bytes, int(done * total_bytes / archive_size))),
+                    check_interrupt=self._interrupt_checker(task),
+                )
+            finally:
+                try:
+                    engine.remove_file(remote_archive)
+                except Exception:
+                    pass
+                engine.disconnect()
+            with tarfile.open(local_archive, "r") as archive:
+                archive.extractall(local_dir)
+        finally:
+            if local_archive and os.path.exists(local_archive):
+                os.remove(local_archive)
+
+    @staticmethod
+    def _exec_remote_shell(engine: SftpEngine, command: str) -> tuple[int, str, str]:
+        if not getattr(engine, "ssh_client", None):
+            raise SSHFerryError(ErrorCode.REMOTE_DISCONNECT, "Remote shell unavailable")
+        _stdin, stdout, stderr = engine.ssh_client.exec_command(command)
+        exit_code = stdout.channel.recv_exit_status()
+        return (
+            exit_code,
+            stdout.read().decode(errors="replace"),
+            stderr.read().decode(errors="replace"),
+        )
 
     def _metric_preset_for_task(self, task: Task) -> str:
         if task.engine not in ("parallel", "dualpath"):

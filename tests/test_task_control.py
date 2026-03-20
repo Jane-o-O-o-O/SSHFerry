@@ -310,6 +310,338 @@ def test_folder_upload_parallelizes_large_child_file(tmp_path):
     assert task.bytes_done == 32
 
 
+def test_folder_upload_mixed_bundles_small_files_and_parallelizes_large_ones(tmp_path):
+    scheduler = create_mock_scheduler()
+    local_dir = tmp_path / "up_mixed"
+    local_dir.mkdir()
+    large_file = local_dir / "big.bin"
+    large_file.write_bytes(b"x" * 32)
+    (local_dir / "a.txt").write_text("aaaa", encoding="utf-8")
+    (local_dir / "b.txt").write_text("bbbb", encoding="utf-8")
+    scheduler.parallel_threshold = 16
+
+    task = Task(
+        task_id="fu_mixed",
+        kind="folder_transfer",
+        engine="sftp",
+        src=str(local_dir),
+        dst="/remote",
+        bytes_total=40,
+        subtask_count=3,
+        dst_site_snapshot=scheduler.site_config,
+    )
+    task.start_time = time.time()
+
+    class BootstrapEngine:
+        def mkdir(self, _path):
+            return None
+
+        def stat(self, _path):
+            raise SSHFerryError(ErrorCode.PATH_NOT_FOUND, "not found")
+
+        @property
+        def site_config(self):
+            return scheduler.site_config
+
+    parallel_calls: list[tuple[str, str]] = []
+    bundle_calls: list[list[str]] = []
+
+    class FakeParallel:
+        def __init__(self, _site, _logger, preset_name=None):
+            self.preset_name = preset_name
+
+        def upload_file(self, src, dst, callback=None, check_interrupt=None):
+            parallel_calls.append((src, dst))
+            if callback:
+                callback(32, 32)
+
+    with patch("src.core.scheduler.ParallelSftpEngine", FakeParallel):
+        with patch.object(scheduler, "_probe_remote_folder_bundle_support", return_value=None):
+            with patch.object(
+                scheduler,
+                "_transfer_folder_upload_bundle",
+                side_effect=lambda *args, **kwargs: bundle_calls.append([item["rel_path"] for item in args[4]]),
+            ):
+                scheduler._upload_dir_recursive(BootstrapEngine(), task, str(local_dir), "/remote")
+
+    assert parallel_calls == [(str(large_file), "/remote/big.bin")]
+    assert bundle_calls == [["a.txt", "b.txt"]]
+    assert task.subtask_done == 3
+    assert task.bytes_done == 40
+
+
+def test_folder_download_mixed_bundles_small_files_and_parallelizes_large_ones(tmp_path):
+    scheduler = create_mock_scheduler()
+    local_dir = tmp_path / "dl_mixed"
+    scheduler.parallel_threshold = 16
+
+    task = Task(
+        task_id="fd_mixed",
+        kind="folder_transfer",
+        engine="sftp",
+        src="/remote",
+        dst=str(local_dir),
+        bytes_total=40,
+        subtask_count=3,
+        src_site_snapshot=scheduler.site_config,
+    )
+    task.start_time = time.time()
+
+    class FakeEngine:
+        def list_dir(self, _path):
+            return [
+                RemoteEntry(name="big.bin", path="/remote/big.bin", is_dir=False, size=32, mtime=time.time()),
+                RemoteEntry(name="a.txt", path="/remote/a.txt", is_dir=False, size=4, mtime=time.time()),
+                RemoteEntry(name="b.txt", path="/remote/b.txt", is_dir=False, size=4, mtime=time.time()),
+            ]
+
+        @property
+        def site_config(self):
+            return scheduler.site_config
+
+    parallel_calls: list[tuple[str, str]] = []
+    bundle_calls: list[list[str]] = []
+
+    class FakeParallel:
+        def __init__(self, _site, _logger, preset_name=None):
+            self.preset_name = preset_name
+
+        def download_file(self, src, dst, callback=None, check_interrupt=None):
+            parallel_calls.append((src, dst))
+            if callback:
+                callback(32, 32)
+
+    with patch("src.core.scheduler.ParallelSftpEngine", FakeParallel):
+        with patch.object(scheduler, "_probe_remote_folder_bundle_support", return_value=None):
+            with patch.object(
+                scheduler,
+                "_transfer_folder_download_bundle",
+                side_effect=lambda *args, **kwargs: bundle_calls.append([item["rel_path"] for item in args[4]]),
+            ):
+                scheduler._download_dir_recursive(FakeEngine(), task, "/remote", str(local_dir))
+
+    assert parallel_calls == [("/remote/big.bin", os.path.join(str(local_dir), "big.bin"))]
+    assert bundle_calls == [["a.txt", "b.txt"]]
+    assert task.subtask_done == 3
+    assert task.bytes_done == 40
+
+
+def test_folder_upload_mixed_keeps_resumable_small_files_out_of_bundle(tmp_path):
+    scheduler = create_mock_scheduler()
+    scheduler.folder_bundle_file_count_threshold = 2
+    scheduler.parallel_threshold = 16
+    local_dir = tmp_path / "up_resume_mixed"
+    local_dir.mkdir()
+    (local_dir / "a.txt").write_text("aaaa", encoding="utf-8")
+    (local_dir / "b.txt").write_text("bbbb", encoding="utf-8")
+
+    task = Task(
+        task_id="fu_resume_mixed",
+        kind="folder_transfer",
+        engine="sftp",
+        src=str(local_dir),
+        dst="/remote",
+        bytes_total=8,
+        subtask_count=2,
+        dst_site_snapshot=scheduler.site_config,
+    )
+    task.start_time = time.time()
+
+    class BootstrapEngine:
+        def mkdir(self, _path):
+            return None
+
+        def stat(self, path):
+            if path.endswith("/a.txt"):
+                return RemoteEntry(name="a.txt", path=path, is_dir=False, size=2, mtime=time.time())
+            raise SSHFerryError(ErrorCode.PATH_NOT_FOUND, "not found")
+
+        @property
+        def site_config(self):
+            return scheduler.site_config
+
+    uploads: list[tuple[str, str, int]] = []
+    bundle_calls: list[list[str]] = []
+
+    class FakeSftpEngine:
+        def __init__(self, _site, _logger):
+            pass
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def stat(self, _path):
+            raise SSHFerryError(ErrorCode.PATH_NOT_FOUND, "not found")
+
+        def upload_file(self, src, dst, callback=None, check_interrupt=None, offset=0):
+            uploads.append((src, dst, offset))
+            if callback:
+                callback(4, 4)
+
+    with patch("src.core.scheduler.SftpEngine", FakeSftpEngine):
+        with patch.object(scheduler, "_probe_remote_folder_bundle_support", return_value=None):
+            with patch.object(
+                scheduler,
+                "_transfer_folder_upload_bundle",
+                side_effect=lambda *args, **kwargs: bundle_calls.append([item["rel_path"] for item in args[4]]),
+            ):
+                scheduler._upload_dir_recursive(BootstrapEngine(), task, str(local_dir), "/remote")
+
+    assert bundle_calls == [["b.txt"]]
+    assert uploads == [(str(local_dir / "a.txt"), "/remote/a.txt", 2)]
+    assert task.subtask_done == 2
+    assert task.bytes_done == 8
+
+
+def test_folder_download_mixed_keeps_resumable_small_files_out_of_bundle(tmp_path):
+    scheduler = create_mock_scheduler()
+    scheduler.folder_bundle_file_count_threshold = 2
+    scheduler.parallel_threshold = 16
+    local_dir = tmp_path / "dl_resume_mixed"
+    local_dir.mkdir()
+    (local_dir / "a.txt").write_text("aa", encoding="utf-8")
+
+    task = Task(
+        task_id="fd_resume_mixed",
+        kind="folder_transfer",
+        engine="sftp",
+        src="/remote",
+        dst=str(local_dir),
+        bytes_total=8,
+        subtask_count=2,
+        src_site_snapshot=scheduler.site_config,
+    )
+    task.start_time = time.time()
+
+    class FakeEngine:
+        def list_dir(self, _path):
+            return [
+                RemoteEntry(name="a.txt", path="/remote/a.txt", is_dir=False, size=4, mtime=time.time()),
+                RemoteEntry(name="b.txt", path="/remote/b.txt", is_dir=False, size=4, mtime=time.time()),
+            ]
+
+        @property
+        def site_config(self):
+            return scheduler.site_config
+
+    downloads: list[tuple[str, str, int]] = []
+    bundle_calls: list[list[str]] = []
+
+    class FakeSftpEngine:
+        def __init__(self, _site, _logger):
+            pass
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def download_file(self, src, dst, callback=None, check_interrupt=None, offset=0):
+            downloads.append((src, dst, offset))
+            if callback:
+                callback(4, 4)
+
+    with patch("src.core.scheduler.SftpEngine", FakeSftpEngine):
+        with patch.object(scheduler, "_probe_remote_folder_bundle_support", return_value=None):
+            with patch.object(
+                scheduler,
+                "_transfer_folder_download_bundle",
+                side_effect=lambda *args, **kwargs: bundle_calls.append([item["rel_path"] for item in args[4]]),
+            ):
+                scheduler._download_dir_recursive(FakeEngine(), task, "/remote", str(local_dir))
+
+    assert bundle_calls == [["b.txt"]]
+    assert downloads == [("/remote/a.txt", os.path.join(str(local_dir), "a.txt"), 2)]
+    assert task.subtask_done == 2
+    assert task.bytes_done == 8
+
+
+def test_folder_upload_bundle_checks_interrupt_while_staging(tmp_path):
+    scheduler = create_mock_scheduler()
+    local_dir = tmp_path / "bundle_interrupt"
+    local_dir.mkdir()
+    file_a = local_dir / "a.txt"
+    file_b = local_dir / "b.txt"
+    file_a.write_text("aaaa", encoding="utf-8")
+    file_b.write_text("bbbb", encoding="utf-8")
+    task = Task(
+        task_id="fu_bundle_interrupt",
+        kind="folder_transfer",
+        engine="sftp",
+        src=str(local_dir),
+        dst="/remote",
+        bytes_total=8,
+        subtask_count=2,
+        dst_site_snapshot=scheduler.site_config,
+    )
+    task.start_time = time.time()
+    add_calls: list[str] = []
+    upload_calls: list[tuple[str, str]] = []
+    interrupt_calls = {"count": 0}
+
+    class FakeArchive:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def add(self, src, arcname):
+            add_calls.append(f"{src}:{arcname}")
+
+    class FakeSftpEngine:
+        def __init__(self, _site, _logger):
+            pass
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def upload_file(self, src, dst, callback=None, check_interrupt=None):
+            upload_calls.append((src, dst))
+
+        def remove_file(self, _path):
+            return None
+
+    def fake_interrupt_checker(_task):
+        def check_interrupt():
+            interrupt_calls["count"] += 1
+            if interrupt_calls["count"] >= 2:
+                raise InterruptedError("Task interrupted")
+            return False
+
+        return check_interrupt
+
+    files = [
+        {"src": str(file_a), "dst": "/remote/a.txt", "size": 4, "rel_path": "a.txt"},
+        {"src": str(file_b), "dst": "/remote/b.txt", "size": 4, "rel_path": "b.txt"},
+    ]
+
+    with patch("src.core.scheduler.SftpEngine", FakeSftpEngine):
+        with patch("src.core.scheduler.tarfile.open", return_value=FakeArchive()):
+            with patch("src.core.scheduler.os.path.getsize", return_value=8):
+                with patch.object(scheduler, "_interrupt_checker", side_effect=fake_interrupt_checker):
+                    with pytest.raises(InterruptedError):
+                        scheduler._transfer_folder_upload_bundle(
+                            task,
+                            scheduler.site_config,
+                            str(local_dir),
+                            "/remote",
+                            files,
+                            bundle_id="bundle-test",
+                            add_progress=lambda _done: None,
+                        )
+
+    assert len(add_calls) == 1
+    assert upload_calls == []
+
+
 def test_progress_callback_uses_rolling_speed_window():
     scheduler = create_mock_scheduler()
     task = Task(task_id="speed1", kind="file_transfer", engine="sftp", src="a", dst="b", bytes_total=1000, status="running")
