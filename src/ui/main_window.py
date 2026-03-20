@@ -857,6 +857,20 @@ class MainWindow(QMainWindow):
         session.status_label.setText(f"Refreshing: {session.site.name}")
         self._list_remote_dir(session_id, path, item, retry_on_failure=True)
 
+    def _refresh_remote_path_context(self, session_id: str, path: str | None):
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        refresh_path = path or session.panel.current_path
+        if refresh_path == session.panel.current_path:
+            self._remote_refresh(session_id)
+            return
+        item = session.panel.find_item_by_path(refresh_path)
+        if item is not None:
+            self._remote_refresh_node(session_id, refresh_path, item)
+            return
+        self._remote_refresh(session_id)
+
     def _remote_mkdir(self, session_id: str, name: str, parent_item: QTreeWidgetItem = None):
         session = self.sessions.get(session_id)
         if not session:
@@ -868,7 +882,7 @@ class MainWindow(QMainWindow):
                 parent_path = entry.path
         full = join_remote_path(parent_path, name)
         thread = RemoteOpThread(session.site, "mkdir", full)
-        thread.op_done.connect(lambda sid=session_id: self._remote_refresh(sid))
+        thread.op_done.connect(lambda sid=session_id, path=parent_path: self._refresh_remote_path_context(sid, path))
         thread.op_failed.connect(lambda msg: self._op_error("mkdir", msg))
         self._start_thread(thread)
 
@@ -877,8 +891,9 @@ class MainWindow(QMainWindow):
         if not session:
             return
         cmd = "remove_dir_recursive" if entry.is_dir else "remove_file"
+        parent_path = get_remote_parent(entry.path) or session.panel.current_path
         thread = RemoteOpThread(session.site, cmd, entry.path)
-        thread.op_done.connect(lambda sid=session_id: self._remote_refresh(sid))
+        thread.op_done.connect(lambda sid=session_id, path=parent_path: self._refresh_remote_path_context(sid, path))
         thread.op_failed.connect(lambda msg: self._op_error("delete", msg))
         self._start_thread(thread)
 
@@ -889,7 +904,7 @@ class MainWindow(QMainWindow):
         parent = get_remote_parent(entry.path) or session.panel.current_path
         new_path = join_remote_path(parent, new_name)
         thread = RemoteOpThread(session.site, "rename", entry.path, new_path)
-        thread.op_done.connect(lambda sid=session_id: self._remote_refresh(sid))
+        thread.op_done.connect(lambda sid=session_id, path=parent: self._refresh_remote_path_context(sid, path))
         thread.op_failed.connect(lambda msg: self._op_error("rename", msg))
         self._start_thread(thread)
 

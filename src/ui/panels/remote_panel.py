@@ -312,6 +312,17 @@ class RemotePanel(QWidget):
                         return p_entry.path
         return self.current_path
 
+    def find_item_by_path(self, path: str) -> QTreeWidgetItem | None:
+        """Return the visible tree item matching a remote path, if any."""
+        if not path:
+            return None
+        root = self.tree.invisibleRootItem()
+        for index in range(root.childCount()):
+            found = self._find_item_by_path_recursive(root.child(index), path)
+            if found:
+                return found
+        return None
+
     # ------------------------------------------------------------------
     # Tree Interaction
     # ------------------------------------------------------------------
@@ -421,6 +432,16 @@ class RemotePanel(QWidget):
         )
         if ok and new_name.strip() and new_name.strip() != entry.name:
             self.request_rename.emit(entry, new_name.strip())
+
+    def _find_item_by_path_recursive(self, item: QTreeWidgetItem, path: str) -> QTreeWidgetItem | None:
+        entry = item.data(0, Qt.UserRole)
+        if entry and entry.path == path:
+            return item
+        for index in range(item.childCount()):
+            found = self._find_item_by_path_recursive(item.child(index), path)
+            if found:
+                return found
+        return None
 
 
 
