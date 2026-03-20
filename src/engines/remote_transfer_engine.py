@@ -45,6 +45,30 @@ class RemoteToRemoteTransferEngine:
         self.relay_upload_preset = relay_upload_preset
         self.folder_file_workers = max(1, int(os.getenv("SSHFERRY_FOLDER_FILE_WORKERS", "3") or "3"))
         self.folder_parallel_file_slots = max(1, int(os.getenv("SSHFERRY_FOLDER_PARALLEL_FILE_SLOTS", "1") or "1"))
+        self.folder_large_file_workers = max(
+            1,
+            int(os.getenv("SSHFERRY_REMOTE_DIR_LARGE_FILE_WORKERS", "2") or "2"),
+        )
+        self.folder_bundle_workers = max(
+            1,
+            int(os.getenv("SSHFERRY_REMOTE_DIR_BUNDLE_WORKERS", "2") or "2"),
+        )
+        self.dir_bundle_enabled = os.getenv(
+            "SSHFERRY_REMOTE_DIR_ARCHIVE_ENABLED",
+            "1",
+        ).strip().lower() not in ("0", "false", "no", "off")
+        self.dir_bundle_file_count_threshold = max(
+            1,
+            int(os.getenv("SSHFERRY_REMOTE_DIR_ARCHIVE_FILE_COUNT_THRESHOLD", "32") or "32"),
+        )
+        self.dir_bundle_max_bytes = max(
+            1024 * 1024,
+            int(os.getenv("SSHFERRY_REMOTE_DIR_ARCHIVE_MAX_BYTES", str(128 * 1024 * 1024)) or str(128 * 1024 * 1024)),
+        )
+        self.dir_bundle_max_files = max(
+            1,
+            int(os.getenv("SSHFERRY_REMOTE_DIR_ARCHIVE_MAX_FILES", "256") or "256"),
+        )
         self.dualpath_enabled = os.getenv("SSHFERRY_REMOTE_DUALPATH_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
         self.dualpath_max_dup_chunks = max(1, int(os.getenv("SSHFERRY_REMOTE_DUALPATH_MAX_DUP_CHUNKS", "1") or "1"))
         self.dualpath_slow_factor = max(1.1, float(os.getenv("SSHFERRY_REMOTE_DUALPATH_SLOW_FACTOR", "1.8") or "1.8"))
@@ -231,18 +255,49 @@ class RemoteToRemoteTransferEngine:
         dst_dir: str,
         callback: Optional[Callable[[int, int], None]] = None,
         check_interrupt: Optional[Callable[[], bool]] = None,
+        item_callback: Optional[Callable[[str, str, int], None]] = None,
     ) -> str:
         """Transfer a directory recursively. Returns transfer mode used."""
         normalized_src = normalize_remote_path(src_dir)
         normalized_dst = normalize_remote_path(dst_dir)
         ensure_in_sandbox(normalized_src, self.src_site.remote_root)
         ensure_in_sandbox(normalized_dst, self.dst_site.remote_root)
+        dir_plan = self._plan_remote_dir_transfer(normalized_src, normalized_dst)
+        if self._should_use_mixed_dir_transfer(dir_plan):
+            try:
+                self._transfer_dir_mixed(
+                    normalized_src,
+                    normalized_dst,
+                    dir_plan,
+                    callback=callback,
+                    check_interrupt=check_interrupt,
+                    item_callback=item_callback,
+                )
+                return "dir_mixed"
+            except SSHFerryError as exc:
+                self.logger.warning(
+                    "remote_mixed_dir_failed src=%s dst=%s reason=%s; falling back",
+                    normalized_src,
+                    normalized_dst,
+                    exc.message,
+                )
         try:
-            self._transfer_dir_direct(normalized_src, normalized_dst, callback=callback, check_interrupt=check_interrupt)
+            self._transfer_dir_direct(
+                normalized_src,
+                normalized_dst,
+                callback=callback,
+                check_interrupt=check_interrupt,
+            )
             return "direct"
         except SSHFerryError as exc:
             self.logger.warning("remote_direct_dir_failed src=%s dst=%s reason=%s", normalized_src, normalized_dst, exc.message)
-            self._transfer_dir_relay(normalized_src, normalized_dst, callback=callback, check_interrupt=check_interrupt)
+            self._transfer_dir_relay(
+                normalized_src,
+                normalized_dst,
+                callback=callback,
+                check_interrupt=check_interrupt,
+                item_callback=item_callback,
+            )
             return "bridge"
 
     def _transfer_file_direct(
@@ -408,7 +463,15 @@ class RemoteToRemoteTransferEngine:
                 self._direct_auth_label(direct_auth),
                 self._summarize_command(cmd),
             )
-            exit_code, std_out, std_err = self._exec_remote_command(src_engine, cmd)
+            exit_code, std_out, std_err = self._exec_remote_command_with_directory_progress(
+                src_engine,
+                dst_engine,
+                cmd,
+                dst_dir,
+                total,
+                callback=callback,
+                check_interrupt=check_interrupt,
+            )
             if exit_code != 0:
                 raise SSHFerryError(
                     ErrorCode.TRANSFER_FAILED,
@@ -465,6 +528,7 @@ class RemoteToRemoteTransferEngine:
         dst_dir: str,
         callback: Optional[Callable[[int, int], None]] = None,
         check_interrupt: Optional[Callable[[], bool]] = None,
+        item_callback: Optional[Callable[[str, str, int], None]] = None,
     ) -> int:
         src_engine = SftpEngine(self.src_site, self.logger)
         dst_engine = SftpEngine(self.dst_site, self.logger)
@@ -482,6 +546,7 @@ class RemoteToRemoteTransferEngine:
                 total,
                 callback,
                 check_interrupt,
+                item_callback,
             )
         finally:
             dst_engine.disconnect()
@@ -496,6 +561,7 @@ class RemoteToRemoteTransferEngine:
         total: int,
         callback: Optional[Callable[[int, int], None]],
         check_interrupt: Optional[Callable[[], bool]],
+        item_callback: Optional[Callable[[str, str, int], None]] = None,
     ) -> int:
         items: list[tuple[str, str, bool, int]] = []
 
@@ -568,6 +634,8 @@ class RemoteToRemoteTransferEngine:
                         stop_state["triggered"] = True
                         return
                     if size >= self.parallel_threshold:
+                        if item_callback:
+                            item_callback("start", os.path.basename(src_path), 1)
                         acquire_parallel_slot()
                         try:
                             self._transfer_file_parallel_bridge(
@@ -579,7 +647,11 @@ class RemoteToRemoteTransferEngine:
                             )
                         finally:
                             release_parallel_slot()
+                        if item_callback:
+                            item_callback("complete", os.path.basename(src_path), 1)
                     else:
+                        if item_callback:
+                            item_callback("start", os.path.basename(src_path), 1)
                         worker_src = SftpEngine(self.src_site, self.logger)
                         worker_dst = SftpEngine(self.dst_site, self.logger)
                         try:
@@ -597,6 +669,8 @@ class RemoteToRemoteTransferEngine:
                         finally:
                             worker_dst.disconnect()
                             worker_src.disconnect()
+                        if item_callback:
+                            item_callback("complete", os.path.basename(src_path), 1)
                     add_progress(src_path, size)
                 except Exception as exc:
                     if not first_error:
@@ -614,6 +688,132 @@ class RemoteToRemoteTransferEngine:
         if first_error:
             raise first_error[0]
         return bytes_done
+
+    def _transfer_dir_mixed(
+        self,
+        src_dir: str,
+        dst_dir: str,
+        dir_plan: dict[str, object],
+        *,
+        callback: Optional[Callable[[int, int], None]] = None,
+        check_interrupt: Optional[Callable[[], bool]] = None,
+        item_callback: Optional[Callable[[str, str, int], None]] = None,
+    ) -> int:
+        total = int(dir_plan["total_bytes"])
+        large_files: list[dict[str, object]] = list(dir_plan["large_files"])
+        small_batches: list[dict[str, object]] = list(dir_plan["small_batches"])
+        directories: list[str] = list(dir_plan["directories"])
+
+        self._ensure_remote_directories_for_plan(dst_dir, directories)
+        if small_batches:
+            self._probe_direct_bundle_support(dst_dir)
+
+        if callback:
+            callback(0, total)
+
+        transferred: dict[str, int] = {}
+        progress_lock = threading.Lock()
+        stop_state = {"triggered": False}
+        first_error: list[Exception] = []
+        large_slots = threading.Semaphore(self.folder_large_file_workers)
+        bundle_slots = threading.Semaphore(self.folder_bundle_workers)
+
+        def add_progress(work_key: str, absolute_done: int) -> None:
+            with progress_lock:
+                previous = transferred.get(work_key, 0)
+                delta = max(0, absolute_done - previous)
+                transferred[work_key] = absolute_done
+                current_done = min(total, sum(transferred.values()))
+            if callback:
+                callback(current_done, total)
+
+        def run_large_file(file_plan: dict[str, object]) -> None:
+            work_key = str(file_plan["src"])
+            if check_interrupt and check_interrupt():
+                raise InterruptedError("Task interrupted")
+            with large_slots:
+                if item_callback:
+                    item_callback("start", os.path.basename(str(file_plan["src"])), 1)
+                self.logger.info(
+                    "remote_dir_mode mode=dir_large_file src=%s dst=%s bytes=%s",
+                    file_plan["src"],
+                    file_plan["dst"],
+                    file_plan["size"],
+                )
+                self.transfer_file(
+                    str(file_plan["src"]),
+                    str(file_plan["dst"]),
+                    callback=lambda done, _total, key=work_key: add_progress(key, done),
+                    check_interrupt=check_interrupt,
+                )
+                add_progress(work_key, int(file_plan["size"]))
+                if item_callback:
+                    item_callback("complete", os.path.basename(str(file_plan["src"])), 1)
+
+        def run_small_bundle(batch_plan: dict[str, object]) -> None:
+            work_key = str(batch_plan["bundle_id"])
+            if check_interrupt and check_interrupt():
+                raise InterruptedError("Task interrupted")
+            with bundle_slots:
+                bundle_label = f"{len(batch_plan['files'])} files"
+                if item_callback:
+                    item_callback("start", bundle_label, 0)
+                self.logger.info(
+                    "remote_dir_mode mode=dir_small_bundle src=%s dst=%s files=%s bytes=%s bundle=%s",
+                    src_dir,
+                    dst_dir,
+                    len(batch_plan["files"]),
+                    batch_plan["total_bytes"],
+                    batch_plan["bundle_id"],
+                )
+                self._transfer_small_file_bundle(
+                    src_dir,
+                    dst_dir,
+                    batch_plan["files"],
+                    bundle_id=work_key,
+                    progress_callback=lambda done, _total, key=work_key: add_progress(key, done),
+                    check_interrupt=check_interrupt,
+                )
+                add_progress(work_key, int(batch_plan["total_bytes"]))
+                if item_callback:
+                    item_callback("complete", bundle_label, len(batch_plan["files"]))
+
+        def worker(job: tuple[str, dict[str, object]]) -> None:
+            if stop_state["triggered"]:
+                return
+            try:
+                job_type, payload = job
+                if job_type == "large":
+                    run_large_file(payload)
+                else:
+                    run_small_bundle(payload)
+            except Exception as exc:
+                if not first_error:
+                    first_error.append(exc)
+                stop_state["triggered"] = True
+                raise
+
+        jobs: list[tuple[str, dict[str, object]]] = [("large", item) for item in large_files]
+        jobs.extend(("bundle", item) for item in small_batches)
+        if not jobs:
+            return 0
+
+        worker_count = max(
+            1,
+            min(len(jobs), self.folder_large_file_workers + self.folder_bundle_workers),
+        )
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [executor.submit(worker, job) for job in jobs]
+            wait(futures)
+
+        if first_error:
+            error = first_error[0]
+            if isinstance(error, InterruptedError):
+                raise error
+            if isinstance(error, SSHFerryError):
+                raise error
+            raise SSHFerryError(ErrorCode.TRANSFER_FAILED, str(error))
+        return sum(transferred.values())
 
     def _stream_file_between_engines(
         self,
@@ -1226,9 +1426,255 @@ class RemoteToRemoteTransferEngine:
                 total += entry.size
         return total
 
+    def _plan_remote_dir_transfer(self, src_dir: str, dst_dir: str) -> dict[str, object]:
+        src_engine = SftpEngine(self.src_site, self.logger)
+        try:
+            src_engine.connect()
+            files, directories = self._scan_remote_dir_entries(src_engine, src_dir, dst_dir)
+        finally:
+            src_engine.disconnect()
+
+        total_bytes = sum(int(item["size"]) for item in files)
+        large_files: list[dict[str, object]] = []
+        small_files: list[dict[str, object]] = []
+        for item in files:
+            if int(item["size"]) >= self.parallel_threshold:
+                large_files.append(item)
+            else:
+                small_files.append(item)
+
+        small_batches = self._build_small_file_batches(small_files)
+        return {
+            "total_bytes": total_bytes,
+            "total_files": len(files),
+            "directories": directories,
+            "large_files": large_files,
+            "small_files": small_files,
+            "small_batches": small_batches,
+        }
+
+    def _scan_remote_dir_entries(
+        self,
+        src_engine: SftpEngine,
+        src_dir: str,
+        dst_dir: str,
+    ) -> tuple[list[dict[str, object]], list[str]]:
+        files: list[dict[str, object]] = []
+        directories: list[str] = []
+        normalized_root = normalize_remote_path(src_dir).rstrip("/") or "/"
+
+        def walk(current_src: str) -> None:
+            for entry in src_engine.list_dir(current_src):
+                relative_path = self._relative_remote_path(normalized_root, entry.path)
+                if entry.is_dir:
+                    directories.append(relative_path)
+                    walk(entry.path)
+                else:
+                    files.append(
+                        {
+                            "src": entry.path,
+                            "dst": self._join_remote_path(dst_dir, relative_path),
+                            "rel_path": relative_path,
+                            "size": int(entry.size),
+                        }
+                    )
+
+        walk(src_dir)
+        return files, directories
+
+    def _build_small_file_batches(self, files: list[dict[str, object]]) -> list[dict[str, object]]:
+        batches: list[dict[str, object]] = []
+        current_files: list[dict[str, object]] = []
+        current_bytes = 0
+        for item in files:
+            item_size = int(item["size"])
+            if current_files and (
+                current_bytes + item_size > self.dir_bundle_max_bytes
+                or len(current_files) >= self.dir_bundle_max_files
+            ):
+                batch_index = len(batches)
+                batches.append(
+                    {
+                        "bundle_id": f"bundle-{batch_index}",
+                        "files": current_files,
+                        "total_bytes": current_bytes,
+                    }
+                )
+                current_files = []
+                current_bytes = 0
+            current_files.append(item)
+            current_bytes += item_size
+        if current_files:
+            batch_index = len(batches)
+            batches.append(
+                {
+                    "bundle_id": f"bundle-{batch_index}",
+                    "files": current_files,
+                    "total_bytes": current_bytes,
+                }
+            )
+        return batches
+
+    def _should_use_mixed_dir_transfer(self, dir_plan: dict[str, object]) -> bool:
+        if not self.dir_bundle_enabled:
+            return False
+        large_count = len(dir_plan["large_files"])
+        small_count = len(dir_plan["small_files"])
+        if large_count and small_count:
+            return True
+        if large_count:
+            return True
+        return small_count >= self.dir_bundle_file_count_threshold
+
+    def _ensure_remote_directories_for_plan(self, dst_dir: str, relative_directories: list[str]) -> None:
+        dst_engine = SftpEngine(self.dst_site, self.logger)
+        try:
+            dst_engine.connect()
+            directories = [dst_dir]
+            directories.extend(self._join_remote_path(dst_dir, relative_path) for relative_path in relative_directories if relative_path)
+            for directory in sorted(set(directories), key=lambda value: (value.count("/"), value)):
+                try:
+                    dst_engine.mkdir(directory)
+                except SSHFerryError:
+                    pass
+        finally:
+            dst_engine.disconnect()
+
+    def _probe_direct_bundle_support(self, dst_dir: str) -> None:
+        if not self._can_attempt_direct_copy():
+            raise SSHFerryError(
+                ErrorCode.TRANSFER_FAILED,
+                f"Direct remote copy unavailable: {self._direct_unavailable_reason()}",
+            )
+        src_engine = SftpEngine(self.src_site, self.logger)
+        dst_engine = SftpEngine(self.dst_site, self.logger)
+        direct_auth: dict[str, str] | None = None
+        try:
+            src_engine.connect()
+            dst_engine.connect()
+            direct_auth = self._prepare_direct_auth(src_engine, dst_engine)
+            self._probe_direct_connectivity(src_engine, dst_dir, direct_auth=direct_auth)
+            probe_cmd = self._build_direct_bundle_probe_command(dst_dir, direct_auth=direct_auth)
+            self.logger.info(
+                "remote_direct_exec phase=bundle_probe dst=%s auth=%s command=%s",
+                dst_dir,
+                self._direct_auth_label(direct_auth),
+                self._summarize_command(probe_cmd),
+            )
+            exit_code, std_out, std_err = self._exec_remote_command(src_engine, probe_cmd)
+            if exit_code != 0 or "SSHFERRY_DIRECT_BUNDLE_OK" not in std_out:
+                raise SSHFerryError(
+                    ErrorCode.TRANSFER_FAILED,
+                    self._format_direct_failure("bundle_probe", exit_code, std_out, std_err),
+                )
+        finally:
+            if direct_auth and direct_auth.get("mode") == "ephemeral_key":
+                self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
+            dst_engine.disconnect()
+            src_engine.disconnect()
+
+    def _transfer_small_file_bundle(
+        self,
+        src_dir: str,
+        dst_dir: str,
+        files: list[dict[str, object]],
+        *,
+        bundle_id: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        check_interrupt: Optional[Callable[[], bool]] = None,
+    ) -> None:
+        if not files:
+            return
+        src_engine = SftpEngine(self.src_site, self.logger)
+        dst_engine = SftpEngine(self.dst_site, self.logger)
+        direct_auth: dict[str, str] | None = None
+        temp_dir = self._join_remote_path(
+            dst_dir,
+            f".sshferry-bundle-{bundle_id}-{int(time.time() * 1000)}-{threading.get_ident()}",
+        )
+        try:
+            src_engine.connect()
+            dst_engine.connect()
+            if check_interrupt and check_interrupt():
+                raise InterruptedError("Task interrupted")
+            direct_auth = self._prepare_direct_auth(src_engine, dst_engine)
+            command = self._build_direct_bundle_command(
+                src_dir,
+                dst_dir,
+                temp_dir,
+                [str(item["rel_path"]) for item in files],
+                direct_auth=direct_auth,
+            )
+            self.logger.info(
+                "remote_direct_exec phase=bundle src=%s dst=%s auth=%s bundle=%s files=%s command=%s",
+                src_dir,
+                dst_dir,
+                self._direct_auth_label(direct_auth),
+                bundle_id,
+                len(files),
+                self._summarize_command(command),
+            )
+            total_bytes = sum(int(item["size"]) for item in files)
+            exit_code, std_out, std_err = self._exec_remote_command_with_directory_progress(
+                src_engine,
+                dst_engine,
+                command,
+                temp_dir,
+                total_bytes,
+                callback=progress_callback,
+                check_interrupt=check_interrupt,
+            )
+            if exit_code != 0 or "SSHFERRY_BUNDLE_OK" not in std_out:
+                raise SSHFerryError(
+                    ErrorCode.TRANSFER_FAILED,
+                    self._format_direct_failure("bundle", exit_code, std_out, std_err),
+                )
+            self.logger.info(
+                "remote_dir_mode mode=dir_bundle_extract dst=%s bundle=%s files=%s",
+                dst_dir,
+                bundle_id,
+                len(files),
+            )
+        finally:
+            try:
+                self._cleanup_remote_temp_dir(dst_engine, temp_dir)
+            except Exception:
+                pass
+            if direct_auth and direct_auth.get("mode") == "ephemeral_key":
+                self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
+            dst_engine.disconnect()
+            src_engine.disconnect()
+
+    def _cleanup_remote_temp_dir(self, dst_engine: SftpEngine, temp_dir: str) -> None:
+        if not getattr(dst_engine, "ssh_client", None):
+            return
+        cleanup_cmd = f"sh -lc 'rm -rf -- {self._shell_quote(temp_dir)}'"
+        try:
+            self._exec_remote_command(dst_engine, cleanup_cmd)
+        except Exception:
+            pass
+
     @staticmethod
     def _shell_quote(text: str) -> str:
         return "'" + text.replace("'", "'\"'\"'") + "'"
+
+    @staticmethod
+    def _relative_remote_path(root_path: str, child_path: str) -> str:
+        normalized_root = normalize_remote_path(root_path).rstrip("/")
+        normalized_child = normalize_remote_path(child_path)
+        prefix = f"{normalized_root}/" if normalized_root else "/"
+        if normalized_child.startswith(prefix):
+            return normalized_child[len(prefix):]
+        if normalized_child == normalized_root:
+            return ""
+        return normalized_child.lstrip("/")
+
+    @staticmethod
+    def _join_remote_path(base_path: str, relative_path: str) -> str:
+        normalized_base = normalize_remote_path(base_path)
+        if not relative_path:
+            return normalized_base
+        return normalize_remote_path(f"{normalized_base.rstrip('/')}/{relative_path.lstrip('/')}")
 
     def _build_direct_ssh_probe_command(
         self,
@@ -1264,6 +1710,44 @@ class RemoteToRemoteTransferEngine:
         args.extend(["--", destination, probe_cmd])
         quoted_args = " ".join(self._shell_quote(arg) for arg in args)
         return f"command -v ssh >/dev/null 2>&1 && {quoted_args}"
+
+    def _build_direct_bundle_probe_command(
+        self,
+        remote_path_hint: str,
+        *,
+        direct_auth: dict[str, str] | None = None,
+    ) -> str:
+        parent = self._remote_parent_dir(remote_path_hint)
+        destination = f"{self.dst_site.username}@{self.dst_site.host}"
+        args = ["ssh"]
+        args.extend(["-p", str(self.dst_site.port), "-o", "BatchMode=yes"])
+        strict_hostkey = os.getenv("SSHFERRY_STRICT_HOSTKEY", "").strip().lower() in ("1", "true", "yes", "on")
+        if not strict_hostkey:
+            args.extend(["-o", "StrictHostKeyChecking=no"])
+        if self.dst_site.proxy_jump:
+            args.extend(["-o", f"ProxyJump={self.dst_site.proxy_jump}"])
+        remote_ssh_config = self._remote_usable_path(self.dst_site.ssh_config_path)
+        if remote_ssh_config:
+            args.extend(["-F", remote_ssh_config])
+        remote_key_path = self._direct_auth_key_path(direct_auth)
+        if remote_key_path:
+            args.extend(["-i", remote_key_path])
+        for option in self.dst_site.ssh_options:
+            normalized = (option or "").strip()
+            if not normalized:
+                continue
+            if normalized.startswith("-o "):
+                normalized = normalized[3:].strip()
+            elif normalized.startswith("-o") and len(normalized) > 2:
+                normalized = normalized[2:].strip()
+            args.extend(["-o", normalized])
+        probe_cmd = (
+            "sh -lc 'command -v tar >/dev/null 2>&1 && "
+            f"test -d {self._shell_quote(parent)} && printf SSHFERRY_DIRECT_BUNDLE_OK'"
+        )
+        args.extend(["--", destination, probe_cmd])
+        quoted_args = " ".join(self._shell_quote(arg) for arg in args)
+        return f"command -v tar >/dev/null 2>&1 && command -v ssh >/dev/null 2>&1 && {quoted_args}"
 
     def _build_direct_scp_command(
         self,
@@ -1338,6 +1822,55 @@ class RemoteToRemoteTransferEngine:
         quoted_ssh = " ".join(self._shell_quote(arg) for arg in ssh_args)
         return f"command -v tail >/dev/null 2>&1 && {source_cmd} | {quoted_ssh}"
 
+    def _build_direct_bundle_command(
+        self,
+        src_dir: str,
+        dst_dir: str,
+        temp_dir: str,
+        relative_paths: list[str],
+        *,
+        direct_auth: dict[str, str] | None = None,
+    ) -> str:
+        destination = f"{self.dst_site.username}@{self.dst_site.host}"
+        ssh_args = ["ssh", "-p", str(self.dst_site.port), "-o", "BatchMode=yes"]
+        strict_hostkey = os.getenv("SSHFERRY_STRICT_HOSTKEY", "").strip().lower() in ("1", "true", "yes", "on")
+        if not strict_hostkey:
+            ssh_args.extend(["-o", "StrictHostKeyChecking=no"])
+        if self.dst_site.proxy_jump:
+            ssh_args.extend(["-o", f"ProxyJump={self.dst_site.proxy_jump}"])
+        remote_ssh_config = self._remote_usable_path(self.dst_site.ssh_config_path)
+        if remote_ssh_config:
+            ssh_args.extend(["-F", remote_ssh_config])
+        remote_key_path = self._direct_auth_key_path(direct_auth)
+        if remote_key_path:
+            ssh_args.extend(["-i", remote_key_path])
+        for option in self.dst_site.ssh_options:
+            normalized = (option or "").strip()
+            if not normalized:
+                continue
+            if normalized.startswith("-o "):
+                normalized = normalized[3:].strip()
+            elif normalized.startswith("-o") and len(normalized) > 2:
+                normalized = normalized[2:].strip()
+            ssh_args.extend(["-o", normalized])
+        dst_cmd = (
+            "set -e; "
+            f"tmp={self._shell_quote(temp_dir)}; "
+            f"dst={self._shell_quote(dst_dir)}; "
+            "rm -rf -- \"$tmp\"; "
+            "mkdir -p \"$tmp\" \"$dst\"; "
+            "tar -xf - -C \"$tmp\"; "
+            "(cd \"$tmp\" && tar -cf - .) | (cd \"$dst\" && tar -xf -); "
+            "rm -rf -- \"$tmp\"; "
+            "printf SSHFERRY_BUNDLE_OK"
+        )
+        ssh_args.extend(["--", destination, f"sh -lc {self._shell_quote(dst_cmd)}"])
+        quoted_ssh = " ".join(self._shell_quote(arg) for arg in ssh_args)
+
+        src_args = ["tar", "-cf", "-", "-C", src_dir, "--", *relative_paths]
+        quoted_src = " ".join(self._shell_quote(arg) for arg in src_args)
+        return f"command -v tar >/dev/null 2>&1 && {quoted_src} | {quoted_ssh}"
+
     def _probe_direct_connectivity(
         self,
         src_engine: SftpEngine,
@@ -1390,6 +1923,43 @@ class RemoteToRemoteTransferEngine:
             if callback:
                 try:
                     remote_size = max(0, min(total, dst_engine.stat(dst_path).size))
+                except Exception:
+                    remote_size = last_reported
+                if remote_size > last_reported:
+                    last_reported = remote_size
+                    callback(remote_size, total)
+            time.sleep(self.direct_progress_poll_interval_seconds)
+        exit_code = channel.recv_exit_status()
+        std_out = stdout.read().decode("utf-8", errors="replace").strip()
+        std_err = stderr.read().decode("utf-8", errors="replace").strip()
+        if callback and exit_code == 0 and last_reported < total:
+            callback(total, total)
+        return exit_code, std_out, std_err
+
+    def _exec_remote_command_with_directory_progress(
+        self,
+        src_engine: SftpEngine,
+        dst_engine: SftpEngine,
+        command: str,
+        dst_dir: str,
+        total: int,
+        *,
+        callback: Optional[Callable[[int, int], None]] = None,
+        check_interrupt: Optional[Callable[[], bool]] = None,
+    ) -> tuple[int, str, str]:
+        _stdin, stdout, stderr = src_engine.ssh_client.exec_command(command)
+        channel = stdout.channel
+        last_reported = 0
+        while not channel.exit_status_ready():
+            if check_interrupt and check_interrupt():
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                raise InterruptedError("Task interrupted")
+            if callback:
+                try:
+                    remote_size = max(0, min(total, self._remote_dir_size(dst_engine, dst_dir)))
                 except Exception:
                     remote_size = last_reported
                 if remote_size > last_reported:

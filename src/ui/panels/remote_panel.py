@@ -4,6 +4,7 @@ import os
 
 from PySide6.QtCore import QByteArray, QMimeData, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPixmap
+from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -243,6 +244,8 @@ class RemotePanel(QWidget):
 
     def populate_node(self, item: QTreeWidgetItem, entries: list[RemoteEntry]):
         """Populate a specific node with entries."""
+        if not isValid(item):
+            return
         # Clear existing children (usually the 'loading' dummy)
         item.takeChildren()
         item.setData(0, self.ROLE_EMPTY_LOADED, False)

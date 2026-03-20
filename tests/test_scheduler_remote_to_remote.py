@@ -801,3 +801,347 @@ def test_remote_to_remote_dir_relay_parallelizes_large_child_file():
     assert bridge_calls == [("/data/src/big.bin", "/data/dst/big.bin", 64)]
     dst_file.write.assert_called_once_with(b"12345678")
     assert progress[-1] == 72
+
+
+def test_remote_to_remote_dir_prefers_mixed_mode_for_large_and_small_files():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        dir_plan = {
+            "total_bytes": 72,
+            "total_files": 2,
+            "directories": [],
+            "large_files": [{"src": "/data/src/big.bin", "dst": "/data/dst/big.bin", "size": 64}],
+            "small_files": [{"src": "/data/src/small.txt", "rel_path": "small.txt", "size": 8}],
+            "small_batches": [{"bundle_id": "bundle-0", "files": [{"rel_path": "small.txt", "size": 8}], "total_bytes": 8}],
+        }
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_plan_remote_dir_transfer",
+            return_value=dir_plan,
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_dir_mixed",
+        ) as mixed:
+            mode = engine.transfer_dir("/data/src", "/data/dst")
+
+    assert mode == "dir_mixed"
+    mixed.assert_called_once()
+
+
+def test_plan_remote_dir_transfer_populates_large_file_destinations():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        src_engine = MagicMock()
+        src_engine.list_dir.side_effect = [
+            [
+                SimpleNamespace(name="nested", path="/data/src/nested", is_dir=True, size=0),
+                SimpleNamespace(name="big.bin", path="/data/src/big.bin", is_dir=False, size=64),
+            ],
+            [
+                SimpleNamespace(name="small.txt", path="/data/src/nested/small.txt", is_dir=False, size=8),
+            ],
+        ]
+
+        with patch("src.engines.remote_transfer_engine.SftpEngine", return_value=src_engine):
+            dir_plan = engine._plan_remote_dir_transfer("/data/src", "/data/dst")
+
+    assert dir_plan["directories"] == ["nested"]
+    assert dir_plan["large_files"] == [
+        {
+            "src": "/data/src/big.bin",
+            "dst": "/data/dst/big.bin",
+            "rel_path": "big.bin",
+            "size": 64,
+        }
+    ]
+    assert dir_plan["small_files"] == [
+        {
+            "src": "/data/src/nested/small.txt",
+            "dst": "/data/dst/nested/small.txt",
+            "rel_path": "nested/small.txt",
+            "size": 8,
+        }
+    ]
+
+
+def test_remote_to_remote_dir_mixed_executes_large_files_and_small_bundles():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        engine.folder_large_file_workers = 1
+        engine.folder_bundle_workers = 1
+
+        dir_plan = {
+            "total_bytes": 72,
+            "large_files": [
+                {"src": "/data/src/big.bin", "dst": "/data/dst/big.bin", "size": 64},
+            ],
+            "small_batches": [
+                {
+                    "bundle_id": "bundle-0",
+                    "files": [{"rel_path": "small.txt", "size": 8}],
+                    "total_bytes": 8,
+                }
+            ],
+            "directories": ["nested"],
+        }
+
+        progress: list[int] = []
+        large_calls: list[tuple[str, str]] = []
+        bundle_calls: list[tuple[str, str, str]] = []
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_ensure_remote_directories_for_plan",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_probe_direct_bundle_support",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "transfer_file",
+            side_effect=lambda src, dst, callback=None, check_interrupt=None: (
+                large_calls.append((src, dst)),
+                callback and callback(64, 64),
+                "parallel_bridge",
+            ),
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_small_file_bundle",
+            side_effect=lambda src_dir, dst_dir, files, bundle_id=None, progress_callback=None, check_interrupt=None: bundle_calls.append(
+                (src_dir, dst_dir, bundle_id or "")
+            ),
+        ):
+            bytes_done = engine._transfer_dir_mixed(
+                "/data/src",
+                "/data/dst",
+                dir_plan,
+                callback=lambda done, _total: progress.append(done),
+            )
+
+    assert bytes_done == 72
+    assert large_calls == [("/data/src/big.bin", "/data/dst/big.bin")]
+    assert bundle_calls == [("/data/src", "/data/dst", "bundle-0")]
+    assert progress[-1] == 72
+
+
+def test_scheduler_remote_to_remote_folder_updates_subtask_progress():
+    src_site = _site("src")
+    dst_site = _site("dst")
+
+    with patch("src.core.scheduler.MetricsCollector"):
+        scheduler = TaskScheduler(logger=MagicMock())
+
+    task = Task(
+        task_id="r2r-folder",
+        kind="folder_transfer",
+        engine="sftp",
+        src="/data/src",
+        dst="/data/dst",
+        bytes_total=72,
+        subtask_count=3,
+        src_endpoint_type="remote",
+        dst_endpoint_type="remote",
+        src_site_snapshot=src_site,
+        dst_site_snapshot=dst_site,
+        status="running",
+    )
+
+    class FakeRemoteTransferEngine:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def transfer_dir(self, src, dst, callback=None, check_interrupt=None, item_callback=None):
+            assert src == "/data/src"
+            assert dst == "/data/dst"
+            if item_callback:
+                item_callback("start", "big.bin", 1)
+            if callback:
+                callback(64, 72)
+            if item_callback:
+                item_callback("complete", "big.bin", 1)
+                item_callback("start", "2 files", 0)
+            if callback:
+                callback(72, 72)
+            if item_callback:
+                item_callback("complete", "2 files", 2)
+            return "dir_mixed"
+
+    with patch("src.core.scheduler.RemoteToRemoteTransferEngine", FakeRemoteTransferEngine):
+        scheduler._execute_remote_to_remote_folder(task)
+
+    assert task.bytes_done == 72
+    assert task.subtask_done == 3
+    assert task.current_file == ""
+
+
+def test_remote_to_remote_dir_mixed_large_only_skips_bundle_probe():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        dir_plan = {
+            "total_bytes": 64,
+            "large_files": [{"src": "/data/src/big.bin", "dst": "/data/dst/big.bin", "size": 64}],
+            "small_batches": [],
+            "directories": [],
+        }
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_ensure_remote_directories_for_plan",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_probe_direct_bundle_support",
+            side_effect=AssertionError("bundle probe should not run"),
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "transfer_file",
+            return_value="parallel_bridge",
+        ):
+            bytes_done = engine._transfer_dir_mixed("/data/src", "/data/dst", dir_plan)
+
+    assert bytes_done == 64
+
+
+def test_remote_to_remote_dir_falls_back_to_relay_when_mixed_fails():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        dir_plan = {
+            "total_bytes": 72,
+            "total_files": 2,
+            "directories": [],
+            "large_files": [{"src": "/data/src/big.bin", "dst": "/data/dst/big.bin", "size": 64}],
+            "small_files": [{"src": "/data/src/small.txt", "rel_path": "small.txt", "size": 8}],
+            "small_batches": [{"bundle_id": "bundle-0", "files": [{"rel_path": "small.txt", "size": 8}], "total_bytes": 8}],
+        }
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_plan_remote_dir_transfer",
+            return_value=dir_plan,
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_dir_mixed",
+            side_effect=SSHFerryError(ErrorCode.TRANSFER_FAILED, "bundle failed"),
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_dir_direct",
+            side_effect=SSHFerryError(ErrorCode.TRANSFER_FAILED, "direct failed"),
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_dir_relay",
+        ) as relay:
+            mode = engine.transfer_dir("/data/src", "/data/dst")
+
+    assert mode == "bridge"
+    relay.assert_called_once()
+
+
+def test_small_bundle_uses_directory_progress_polling():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        src_engine = MagicMock()
+        dst_engine = MagicMock()
+        files = [
+            {"rel_path": "a.txt", "size": 8},
+            {"rel_path": "b.txt", "size": 4},
+        ]
+        progress_updates: list[int] = []
+
+        with patch("src.engines.remote_transfer_engine.SftpEngine", side_effect=[src_engine, dst_engine]), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_prepare_direct_auth",
+            return_value={"mode": "site_key", "key_path": "/tmp/key"},
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_exec_remote_command_with_directory_progress",
+            return_value=(0, "SSHFERRY_BUNDLE_OK", ""),
+        ) as progress_exec, patch.object(
+            RemoteToRemoteTransferEngine,
+            "_cleanup_remote_temp_dir",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_cleanup_direct_auth",
+        ):
+            engine._transfer_small_file_bundle(
+                "/data/src",
+                "/data/dst",
+                files,
+                bundle_id="bundle-1",
+                progress_callback=lambda done, _total: progress_updates.append(done),
+            )
+
+    assert progress_exec.called
+    assert progress_exec.call_args.args[3].startswith("/data/dst/.sshferry-bundle-bundle-1-")
+    assert progress_exec.call_args.args[4] == 12
+
+
+def test_small_bundle_keeps_temp_dir_under_destination_root():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        src_engine = MagicMock()
+        dst_engine = MagicMock()
+
+        with patch("src.engines.remote_transfer_engine.SftpEngine", side_effect=[src_engine, dst_engine]), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_prepare_direct_auth",
+            return_value={"mode": "site_key", "key_path": "/tmp/key"},
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_exec_remote_command_with_directory_progress",
+            return_value=(0, "SSHFERRY_BUNDLE_OK", ""),
+        ) as progress_exec, patch.object(
+            RemoteToRemoteTransferEngine,
+            "_cleanup_remote_temp_dir",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_cleanup_direct_auth",
+        ):
+            engine._transfer_small_file_bundle(
+                "/data/src",
+                "/data",
+                [{"rel_path": "small.txt", "size": 8}],
+                bundle_id="bundle-root",
+            )
+
+    assert progress_exec.call_args.args[3].startswith("/data/.sshferry-bundle-bundle-root-")

@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtCore import QSize
+from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -780,7 +781,11 @@ class MainWindow(QMainWindow):
         if not session:
             return
         if parent_item:
-            session.panel.populate_node(parent_item, entries)
+            target_item = parent_item if isValid(parent_item) else session.panel.find_item_by_path(path)
+            if not target_item:
+                self._log(f"[{session.site.name}] Ignored stale list result for {path}")
+                return
+            session.panel.populate_node(target_item, entries)
         else:
             session.panel.set_path(path)
             session.panel.set_root_entries(entries)

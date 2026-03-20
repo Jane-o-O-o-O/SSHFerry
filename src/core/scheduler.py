@@ -811,15 +811,29 @@ class TaskScheduler:
             relay_download_preset=self.remote_relay_download_preset,
             relay_upload_preset=self.remote_relay_upload_preset,
         )
+
+        def folder_item_progress(event: str, label: str, count: int) -> None:
+            with self.task_lock:
+                if event == "start":
+                    task.current_file = label
+                    return
+                if event == "complete":
+                    if count > 0:
+                        task.subtask_done = min(task.subtask_count, task.subtask_done + count)
+                    task.current_file = label
+
         engine.transfer_dir(
             task.src,
             task.dst,
             callback=self._progress_callback(task),
             check_interrupt=self._interrupt_checker(task),
+            item_callback=folder_item_progress,
         )
-        if not task.subtask_count:
-            task.subtask_count = 1
-            task.subtask_done = 1
+        with self.task_lock:
+            if not task.subtask_count:
+                task.subtask_count = 1
+            task.subtask_done = task.subtask_count
+            task.current_file = ""
 
     def _execute_delete(self, task: Task):
         site = self._require_site(task.src_site_snapshot or self.site_config, "delete target")
