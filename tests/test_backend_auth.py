@@ -26,6 +26,25 @@ def _run_in_temp_store(test_name: str, runner):
         if base_dir.exists():
             shutil.rmtree(base_dir)
 
+def _issue_captcha_payload(client: TestClient) -> dict[str, str]:
+    response = client.get('/api/auth/captcha')
+    assert response.status_code == 200
+    body = response.json()
+    svg = body['image_svg']
+    marker = "</text>"
+    text_start = svg.find('>') + 1
+    code = ''
+    search_from = 0
+    while True:
+      text_index = svg.find('<text', search_from)
+      if text_index < 0:
+          break
+      value_start = svg.find('>', text_index) + 1
+      value_end = svg.find(marker, value_start)
+      code += svg[value_start:value_end]
+      search_from = value_end + len(marker)
+    return {'captcha_id': body['captcha_id'], 'captcha_code': code}
+
 def test_auth_session_returns_token_and_header_name():
     def runner(store_path: Path, _: Path):
         state = _build_state(store_path)
@@ -51,6 +70,20 @@ def test_protected_route_requires_token_header():
         assert allowed.status_code == 200
     _run_in_temp_store('token-required', runner)
 
+def test_local_dev_can_disable_auto_login():
+    def runner(store_path: Path, _: Path):
+        env = {
+            'SSHFERRY_RUNTIME_MODE': 'local-dev',
+            'SSHFERRY_LOCAL_DEV_AUTO_LOGIN': 'false',
+        }
+        with patch.dict(os.environ, env, clear=False):
+            state = _build_state(store_path)
+            app = create_app(app_state_factory=lambda: state)
+            with TestClient(app) as client:
+                me = client.get('/api/auth/me')
+        assert me.status_code == 401
+    _run_in_temp_store('local-dev-auto-login-disabled', runner)
+
 def test_deployed_web_signup_login_me_refresh_logout_flow():
     def runner(store_path: Path, base_dir: Path):
         owner_file = base_dir / 'owner.json'
@@ -69,13 +102,16 @@ def test_deployed_web_signup_login_me_refresh_logout_flow():
             with TestClient(app) as client:
                 health = client.get('/api/health')
                 anonymous_me = client.get('/api/auth/me')
-                signup = client.post('/api/auth/signup', json={'username': 'alice', 'password': 'secret-pass-456', 'display_name': 'Alice'})
+                signup_captcha = _issue_captcha_payload(client)
+                signup = client.post('/api/auth/signup', json={'username': 'alice', 'password': 'secret-pass-456', 'display_name': 'Alice', **signup_captcha})
                 me = client.get('/api/auth/me')
                 protected = client.get('/api/sites')
                 logout = client.post('/api/auth/logout')
-                login = client.post('/api/auth/login', json={'username': 'alice', 'password': 'secret-pass-456'})
+                login_captcha = _issue_captcha_payload(client)
+                login = client.post('/api/auth/login', json={'username': 'alice', 'password': 'secret-pass-456', **login_captcha})
                 refreshed = client.post('/api/auth/refresh')
-                owner_login = client.post('/api/auth/login', json={'username': 'owner', 'password': 'secret-pass-123'})
+                owner_login_captcha = _issue_captcha_payload(client)
+                owner_login = client.post('/api/auth/login', json={'username': 'owner', 'password': 'secret-pass-123', **owner_login_captcha})
                 me_after_owner_login = client.get('/api/auth/me')
         assert health.status_code == 200
         health_body = health.json()

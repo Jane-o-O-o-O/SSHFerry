@@ -45,15 +45,25 @@ export interface AuthUserResponse {
   session_expires_at: number;
 }
 
+export interface AuthCaptchaResponse {
+  captcha_id: string;
+  image_svg: string;
+  expires_at: number;
+}
+
 export interface AuthLoginRequest {
   username: string;
   password: string;
+  captcha_id: string;
+  captcha_code: string;
 }
 
 export interface AuthSignupRequest {
   username: string;
   password: string;
   display_name?: string | null;
+  captcha_id: string;
+  captcha_code: string;
 }
 
 export interface SiteUpsertRequest {

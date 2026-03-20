@@ -1141,6 +1141,10 @@ a {
   .site-action-span-2 {
     grid-column: auto;
   }
+
+  .captcha-row {
+    grid-template-columns: 1fr;
+  }
 }
 .middle-workspace {
   display: flex;
@@ -1453,6 +1457,46 @@ a {
 .login-actions {
   display: flex;
   justify-content: flex-start;
+}
+
+.login-actions-symmetric {
+  justify-content: stretch;
+  gap: 12px;
+}
+
+.login-action-button {
+  flex: 1 1 0;
+  justify-content: center;
+  text-align: center;
+}
+
+.captcha-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 152px;
+  gap: 12px;
+  align-items: end;
+}
+
+.captcha-visual-shell {
+  display: grid;
+  gap: 8px;
+}
+
+.captcha-visual {
+  width: 100%;
+  min-height: 88px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.82);
+  display: grid;
+  place-items: center;
+  padding: 8px;
+}
+
+.captcha-visual svg {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .login-notice {

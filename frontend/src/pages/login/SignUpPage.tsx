@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
-import { getHealth, signup } from '../../api/auth';
+import { getCaptcha, getHealth, signup } from '../../api/auth';
 import { getErrorMessage } from '../../api/http';
 import { useI18n } from '../../i18n';
 import { useAuthStore } from '../../store/auth';
@@ -19,7 +19,11 @@ export function SignUpPage() {
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [captchaCode, setCaptchaCode] = useState('');
+  const [captchaId, setCaptchaId] = useState('');
+  const [captchaSvg, setCaptchaSvg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [captchaLoading, setCaptchaLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const redirectTarget = useMemo(() => {
@@ -33,6 +37,22 @@ export function SignUpPage() {
     }
   }, [navigate, redirectTarget, status]);
 
+  useEffect(() => {
+    void refreshCaptcha();
+  }, []);
+
+  async function refreshCaptcha() {
+    setCaptchaLoading(true);
+    try {
+      const captcha = await getCaptcha();
+      setCaptchaId(captcha.captcha_id);
+      setCaptchaSvg(captcha.image_svg);
+      setCaptchaCode('');
+    } finally {
+      setCaptchaLoading(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (password !== confirmPassword) {
@@ -42,13 +62,20 @@ export function SignUpPage() {
     setSubmitting(true);
     setFormError(null);
     try {
-      const user = await signup({ username, password, display_name: displayName || null });
+      const user = await signup({
+        username,
+        password,
+        display_name: displayName || null,
+        captcha_id: captchaId,
+        captcha_code: captchaCode,
+      });
       const latestHealth = health ?? (await getHealth());
       setAuthenticated({ health: latestHealth, user });
       clearAuthNotice();
       navigate(redirectTarget, { replace: true });
     } catch (error) {
       setFormError(getErrorMessage(error, t('signup.failed')));
+      await refreshCaptcha();
     } finally {
       setSubmitting(false);
     }
@@ -88,15 +115,26 @@ export function SignUpPage() {
             <span>{t('signup.confirmPassword')}</span>
             <input autoComplete="new-password" name="confirmPassword" type="password" placeholder={t('signup.confirmPasswordPlaceholder')} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
           </label>
-          <div className="login-actions">
-            <button type="submit" className="primary-button" disabled={submitting}>
+          <div className="captcha-row">
+            <label className="form-field">
+              <span>{t('auth.captcha')}</span>
+              <input name="captchaCode" placeholder={t('auth.captchaPlaceholder')} value={captchaCode} onChange={(event) => setCaptchaCode(event.target.value.toUpperCase())} />
+            </label>
+            <div className="captcha-visual-shell">
+              <button type="button" className="captcha-visual" onClick={() => void refreshCaptcha()} disabled={captchaLoading} title={t('auth.refreshCaptcha')}>
+                {captchaSvg ? <span dangerouslySetInnerHTML={{ __html: captchaSvg }} /> : t('common.loading')}
+              </button>
+            </div>
+          </div>
+          <div className="login-actions login-actions-symmetric">
+            <button type="submit" className="primary-button login-action-button" disabled={submitting || !captchaId}>
               {submitting ? t('signup.submitting') : t('signup.submit')}
             </button>
+            <Link to="/login" className="ghost-button login-action-button">
+              {t('signup.switchAction')}
+            </Link>
           </div>
         </form>
-        <p>
-          {t('signup.switchPrompt')} <Link to="/login">{t('signup.switchAction')}</Link>
-        </p>
       </section>
     </main>
   );

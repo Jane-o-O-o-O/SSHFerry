@@ -14,6 +14,8 @@ ROLE_OWNER='owner'
 ROLE_OPERATOR='operator'
 LOCAL_DEV_USER_ID='local-dev-owner'
 USERNAME_PATTERN=re.compile(r'^[a-zA-Z0-9_.-]{3,32}$')
+CAPTCHA_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+CAPTCHA_TTL_SECONDS=5*60
 MIN_PASSWORD_LENGTH=8
 MAX_PASSWORD_LENGTH=256
 
@@ -70,6 +72,12 @@ class FailedLoginState:
     failed_attempts:int=0
     locked_until:int|None=None
 
+@dataclass(slots=True)
+class CaptchaChallenge:
+    captcha_id:str
+    code:str
+    expires_at:int
+
 class AuthService:
     def __init__(self, settings:RuntimeSettings, logger:logging.Logger|None=None)->None:
         self.settings=settings
@@ -82,6 +90,7 @@ class AuthService:
         self._session_ids_by_refresh_hash:dict[str,str]={}
         self._rate_limit_buckets:dict[str,list[int]]={}
         self._login_failures:dict[str,FailedLoginState]={}
+        self._captchas_by_id:dict[str,CaptchaChallenge]={}
         self._users_by_id:dict[str,AuthUser]={}
         self._password_hashes_by_user_id:dict[str,str]={}
         self._user_ids_by_username:dict[str,str]={}
@@ -106,7 +115,7 @@ class AuthService:
             raise
     def stop(self)->None:
         with self.lock:
-            self._sessions_by_id.clear(); self._session_ids_by_refresh_hash.clear(); self._rate_limit_buckets.clear(); self._login_failures.clear()
+            self._sessions_by_id.clear(); self._session_ids_by_refresh_hash.clear(); self._rate_limit_buckets.clear(); self._login_failures.clear(); self._captchas_by_id.clear()
     def login(self, username:str, password:str, client_ip:str|None, user_agent:str|None)->tuple[AuthContext,AuthTokens]:
         normalized_username=self._normalize_username(username)
         if not normalized_username or not password:
@@ -124,6 +133,26 @@ class AuthService:
         context,tokens=self._issue_session(user, client_ip=client_ip, user_agent=user_agent)
         self.logger.info('Login succeeded for username=%s ip=%s', normalized_username, client_ip or 'unknown')
         return context,tokens
+    def issue_captcha(self)->CaptchaChallenge:
+        now=int(time.time())
+        captcha=CaptchaChallenge(captcha_id=uuid4().hex, code=''.join(secrets.choice(CAPTCHA_ALPHABET) for _ in range(4)), expires_at=now+CAPTCHA_TTL_SECONDS)
+        with self.lock:
+            self._purge_expired_captchas(now)
+            self._captchas_by_id[captcha.captcha_id]=captcha
+        return captcha
+    def verify_captcha(self, captcha_id:str, captcha_code:str)->None:
+        normalized_id=(captcha_id or '').strip()
+        normalized_code=(captcha_code or '').strip().upper()
+        if not normalized_id or not normalized_code:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Captcha is required.')
+        now=int(time.time())
+        with self.lock:
+            self._purge_expired_captchas(now)
+            challenge=self._captchas_by_id.pop(normalized_id, None)
+        if challenge is None or challenge.expires_at<=now:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Captcha expired. Please refresh and try again.')
+        if not hmac.compare_digest(challenge.code, normalized_code):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Incorrect captcha code.')
     def signup(self, username:str, password:str, display_name:str|None, client_ip:str|None, user_agent:str|None)->tuple[AuthContext,AuthTokens]:
         self._ensure_ready()
         normalized_username=self._validate_username(username)
@@ -345,6 +374,10 @@ class AuthService:
             session=self._sessions_by_id.pop(session_id, None)
             if session is not None:
                 self._session_ids_by_refresh_hash.pop(session.refresh_token_hash, None)
+    def _purge_expired_captchas(self, now:int)->None:
+        expired_ids=[captcha_id for captcha_id,captcha in self._captchas_by_id.items() if captcha.expires_at<=now]
+        for captcha_id in expired_ids:
+            self._captchas_by_id.pop(captcha_id, None)
     def _check_rate_limit(self, key:str, window_seconds:int, max_attempts:int, detail:str)->None:
         now=int(time.time())
         with self.lock:
@@ -421,3 +454,26 @@ def verify_password(password:str, encoded:str)->bool:
         return False
     candidate=hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), _b64decode(salt_b64), iterations)
     return hmac.compare_digest(candidate, _b64decode(digest_b64))
+
+def render_captcha_svg(code:str)->str:
+    width=132
+    height=44
+    chars=[]
+    for index,char in enumerate(code):
+        x=18 + index*26
+        y=30 + (-1 if index % 2 == 0 else 2)
+        rotation=-12 + index*8
+        chars.append(
+            f"<text x='{x}' y='{y}' font-size='24' font-family='monospace' fill='#214857' transform='rotate({rotation} {x} {y})'>{char}</text>"
+        )
+    lines=[
+        "<line x1='10' y1='12' x2='122' y2='34' stroke='#c7d8dd' stroke-width='2' />",
+        "<line x1='16' y1='38' x2='112' y2='10' stroke='#e5d8c4' stroke-width='2' />",
+    ]
+    return (
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' viewBox='0 0 {width} {height}' role='img' aria-label='captcha'>"
+        "<rect width='100%' height='100%' rx='10' fill='#f7f4ee' />"
+        + ''.join(lines)
+        + ''.join(chars)
+        + "</svg>"
+    )

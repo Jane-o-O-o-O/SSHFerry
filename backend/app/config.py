@@ -74,6 +74,7 @@ class RuntimeSettings:
     owner_password: str | None
     owner_password_hash: str | None
     auth_secret: str | None
+    local_dev_auto_login: bool
     legacy_local_token_enabled: bool
     login_rate_limit_window_seconds: int
     login_rate_limit_max_attempts: int
@@ -147,6 +148,7 @@ def build_runtime_settings() -> RuntimeSettings:
         owner_password=os.getenv('SSHFERRY_OWNER_PASSWORD', '') or None,
         owner_password_hash=os.getenv('SSHFERRY_OWNER_PASSWORD_HASH', '').strip() or None,
         auth_secret=os.getenv('SSHFERRY_AUTH_SECRET', '').strip() or None,
+        local_dev_auto_login=_get_bool('SSHFERRY_LOCAL_DEV_AUTO_LOGIN', runtime_mode == 'local-dev'),
         legacy_local_token_enabled=_get_bool('SSHFERRY_ENABLE_LOCAL_LEGACY_AUTH', runtime_mode == 'local-dev'),
         login_rate_limit_window_seconds=_get_int('SSHFERRY_LOGIN_RATE_LIMIT_WINDOW_SECONDS', 60),
         login_rate_limit_max_attempts=_get_int('SSHFERRY_LOGIN_RATE_LIMIT_MAX_ATTEMPTS', 10),
