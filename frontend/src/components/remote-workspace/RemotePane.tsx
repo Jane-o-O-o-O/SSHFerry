@@ -50,6 +50,10 @@ export function RemotePane({
     queryKey: ['remote-list', pane.sessionId, pane.currentPath],
     queryFn: () => listRemoteFiles(pane.sessionId, pane.currentPath),
     enabled: !pane.stale,
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
+    refetchOnMount: false,
+    placeholderData: (previousData) => previousData,
   });
 
   const mkdirMutation = useMutation({ mutationFn: ({ path }: { path: string }) => createRemoteDirectory(pane.sessionId, path) });
