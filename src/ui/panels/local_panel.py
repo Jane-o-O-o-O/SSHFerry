@@ -1,6 +1,7 @@
 """Local file system panel using QFileSystemModel."""
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,8 +15,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QHeaderView,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QStyledItemDelegate,
     QTreeView,
@@ -157,6 +161,7 @@ class LocalPanel(QWidget):
     file_selected = Signal(str)  # full path of selected file
     dir_changed = Signal(str)  # current directory changed
     files_dropped = Signal(str, list, str)  # source session id, remote paths, target local directory
+    request_upload_paths = Signal(list)  # upload selected local paths to active remote session
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -252,6 +257,8 @@ class LocalPanel(QWidget):
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.tree.sortByColumn(0, Qt.AscendingOrder)
         self.tree.doubleClicked.connect(self._on_double_clicked)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.setItemDelegateForColumn(1, SizeColumnDelegate(self.tree))
         self.tree.setItemDelegateForColumn(3, DateColumnDelegate(self.tree))
 
@@ -339,6 +346,132 @@ class LocalPanel(QWidget):
 
     def get_current_dir(self) -> str:
         return self.current_dir
+
+    def _show_context_menu(self, pos):
+        idx = self.tree.indexAt(pos)
+        if idx.isValid() and not self.tree.selectionModel().isSelected(idx):
+            self.tree.selectionModel().clearSelection()
+            self.tree.selectionModel().select(
+                idx,
+                QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+            )
+            self.tree.setCurrentIndex(idx)
+        elif not idx.isValid():
+            self.tree.selectionModel().clearSelection()
+            self.tree.setCurrentIndex(QModelIndex())
+
+        selected_paths = self._selected_paths_for_context_menu()
+        target_dir = self._target_dir_from_pos(self.mapFromGlobal(self.tree.viewport().mapToGlobal(pos)))
+        menu = QMenu(self)
+
+        act_open = menu.addAction("Open")
+        act_open.triggered.connect(lambda: self._open_selected_path(selected_paths))
+        act_open.setEnabled(bool(selected_paths))
+
+        act_upload = menu.addAction("Upload to Active Remote")
+        act_upload.triggered.connect(lambda: self.request_upload_paths.emit(selected_paths))
+        act_upload.setEnabled(bool(selected_paths))
+
+        menu.addSeparator()
+
+        act_rename = menu.addAction("Rename")
+        act_rename.triggered.connect(lambda: self._rename_selected_path(selected_paths))
+        act_rename.setEnabled(len(selected_paths) == 1)
+
+        act_delete = menu.addAction("Delete")
+        act_delete.triggered.connect(lambda: self._delete_selected_paths(selected_paths))
+        act_delete.setEnabled(bool(selected_paths))
+
+        menu.addSeparator()
+
+        act_mkdir = menu.addAction("New Folder")
+        act_mkdir.triggered.connect(lambda: self._create_folder(target_dir))
+
+        menu.addSeparator()
+
+        act_refresh = menu.addAction("Refresh")
+        act_refresh.triggered.connect(self._refresh)
+
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _selected_paths_for_context_menu(self) -> list[str]:
+        return self.get_selected_paths()
+
+    def _open_selected_path(self, selected_paths: list[str]) -> None:
+        if not selected_paths:
+            return
+        path = selected_paths[0]
+        if os.path.isdir(path):
+            self._navigate_to(path)
+            return
+        self.file_selected.emit(path)
+
+    def _rename_selected_path(self, selected_paths: list[str]) -> None:
+        if len(selected_paths) != 1:
+            return
+        path = selected_paths[0]
+        current_name = os.path.basename(path.rstrip("/\\")) or path
+        new_name, ok = QInputDialog.getText(self, "Rename", "New name:", text=current_name)
+        if not ok or not new_name.strip() or new_name.strip() == current_name:
+            return
+        new_path = os.path.join(os.path.dirname(path), new_name.strip())
+        try:
+            os.rename(path, new_path)
+            if os.path.normcase(path) == os.path.normcase(self.current_dir):
+                self.current_dir = new_path
+                self.path_edit.setText(new_path)
+            self._refresh()
+        except Exception as exc:
+            QMessageBox.critical(self, "Rename Error", str(exc))
+
+    def _delete_selected_paths(self, selected_paths: list[str]) -> None:
+        paths = self._prune_nested_paths(selected_paths)
+        if not paths:
+            return
+        label = paths[0] if len(paths) == 1 else f"{len(paths)} items"
+        answer = QMessageBox.question(
+            self,
+            "Delete",
+            f"Delete {label}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            for path in paths:
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                elif os.path.exists(path):
+                    os.remove(path)
+            self._refresh()
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Error", str(exc))
+
+    def _create_folder(self, parent_dir: str) -> None:
+        name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+        if not ok or not name.strip():
+            return
+        try:
+            os.makedirs(os.path.join(parent_dir, name.strip()), exist_ok=False)
+            self._refresh()
+        except Exception as exc:
+            QMessageBox.critical(self, "Create Folder Error", str(exc))
+
+    @staticmethod
+    def _prune_nested_paths(paths: list[str]) -> list[str]:
+        unique_paths = []
+        normalized = sorted({os.path.normcase(os.path.abspath(path)): path for path in paths}.items())
+        kept_prefixes: list[str] = []
+        for normalized_path, original_path in normalized:
+            if any(
+                normalized_path == prefix or normalized_path.startswith(prefix + os.sep)
+                for prefix in kept_prefixes
+            ):
+                continue
+            kept_prefixes.append(normalized_path)
+            unique_paths.append(original_path)
+        return unique_paths
 
     # Drag-drop support for receiving downloads
     def dragEnterEvent(self, event):

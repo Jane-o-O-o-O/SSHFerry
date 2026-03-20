@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtCore import QSize
+from PySide6.QtGui import QDesktopServices
 from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -28,8 +29,9 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
-)
+    )
 from PySide6.QtWidgets import QTreeWidgetItem
+from PySide6.QtCore import QUrl
 
 from src.core.scheduler import TaskScheduler
 from src.engines.sftp_engine import SftpEngine
@@ -314,7 +316,9 @@ class MainWindow(QMainWindow):
 
         self.local_panel = LocalPanel()
         self.local_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.local_panel.file_selected.connect(self._on_local_file_selected)
         self.local_panel.files_dropped.connect(self._download_paths)
+        self.local_panel.request_upload_paths.connect(self._upload_local_paths_to_active_remote)
 
         self.remote_area = QFrame()
         self.remote_area.setObjectName("panelCard")
@@ -946,6 +950,13 @@ class MainWindow(QMainWindow):
     def _upload_files(self, session_id: str):
         self._upload_paths(session_id, self.local_panel.get_selected_paths())
 
+    def _upload_local_paths_to_active_remote(self, paths: list[str]):
+        session = self._current_session()
+        if not session:
+            QMessageBox.warning(self, "No Remote Session", "Open or select a remote session first.")
+            return
+        self._activate_and_run(session.session_id, self._upload_paths, paths)
+
     def _upload_paths(self, session_id: str, paths: list, target_item: QTreeWidgetItem = None):
         session = self.sessions.get(session_id)
         if not session or not paths:
@@ -1242,6 +1253,18 @@ class MainWindow(QMainWindow):
         self._bg_threads.append(thread)
         thread.finished.connect(lambda: self._bg_threads.remove(thread) if thread in self._bg_threads else None)
         thread.start()
+
+    def _on_local_file_selected(self, path: str):
+        try:
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                opened = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+                if not opened:
+                    raise OSError(f"Unable to open {path}")
+        except Exception as exc:
+            self._log(f"open local file failed: {exc}")
+            QMessageBox.critical(self, "Open File Error", str(exc))
 
     def _op_error(self, op: str, msg: str):
         self._log(f"{op} failed: {msg}")
