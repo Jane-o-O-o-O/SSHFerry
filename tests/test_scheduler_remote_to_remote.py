@@ -917,7 +917,7 @@ def test_remote_to_remote_dir_mixed_executes_large_files_and_small_bundles():
         ), patch.object(
             RemoteToRemoteTransferEngine,
             "transfer_file",
-            side_effect=lambda src, dst, callback=None, check_interrupt=None: (
+            side_effect=lambda src, dst, callback=None, check_interrupt=None, cleanup_cached_auth=True: (
                 large_calls.append((src, dst)),
                 callback and callback(64, 64),
                 "parallel_bridge",
@@ -1023,6 +1023,99 @@ def test_remote_to_remote_dir_mixed_large_only_skips_bundle_probe():
             bytes_done = engine._transfer_dir_mixed("/data/src", "/data/dst", dir_plan)
 
     assert bytes_done == 64
+
+
+def test_remote_to_remote_dir_mixed_warms_direct_auth_before_bundle_probe():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        dir_plan = {
+            "total_bytes": 12,
+            "large_files": [],
+            "small_batches": [
+                {
+                    "bundle_id": "bundle-0",
+                    "files": [{"rel_path": "a.txt", "size": 12}],
+                    "total_bytes": 12,
+                }
+            ],
+            "directories": [],
+        }
+        call_order: list[str] = []
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_ensure_remote_directories_for_plan",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_warm_cached_direct_auth",
+            side_effect=lambda *args, **kwargs: call_order.append("warm"),
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_probe_direct_bundle_support",
+            side_effect=lambda *args, **kwargs: call_order.append("probe"),
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_small_file_bundle",
+        ):
+            bytes_done = engine._transfer_dir_mixed("/data/src", "/data/dst", dir_plan)
+
+    assert bytes_done == 12
+    assert call_order[:2] == ["warm", "probe"]
+
+
+def test_remote_to_remote_dir_mixed_defers_cached_auth_cleanup_until_end():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine"):
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        dir_plan = {
+            "total_bytes": 76,
+            "large_files": [{"src": "/data/src/big.bin", "dst": "/data/dst/big.bin", "size": 64}],
+            "small_batches": [
+                {
+                    "bundle_id": "bundle-0",
+                    "files": [{"rel_path": "a.txt", "size": 12}],
+                    "total_bytes": 12,
+                }
+            ],
+            "directories": [],
+        }
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_ensure_remote_directories_for_plan",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_warm_cached_direct_auth",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_probe_direct_bundle_support",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "_transfer_small_file_bundle",
+        ), patch.object(
+            RemoteToRemoteTransferEngine,
+            "transfer_file",
+            return_value="direct",
+        ) as transfer_file, patch.object(
+            RemoteToRemoteTransferEngine,
+            "_cleanup_cached_direct_auth",
+        ) as cleanup:
+            bytes_done = engine._transfer_dir_mixed("/data/src", "/data/dst", dir_plan)
+
+    assert bytes_done == 76
+    assert transfer_file.call_args.kwargs["cleanup_cached_auth"] is False
+    cleanup.assert_called_once()
 
 
 def test_remote_to_remote_dir_falls_back_to_relay_when_mixed_fails():
@@ -1145,3 +1238,52 @@ def test_small_bundle_keeps_temp_dir_under_destination_root():
             )
 
     assert progress_exec.call_args.args[3].startswith("/data/.sshferry-bundle-bundle-root-")
+
+
+def test_warm_cached_direct_auth_bootstraps_once():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine") as engine_cls:
+        from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+        engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+        src_engine = MagicMock()
+        dst_engine = MagicMock()
+        engine_cls.side_effect = [src_engine, dst_engine]
+
+        with patch.object(
+            RemoteToRemoteTransferEngine,
+            "_prepare_direct_auth",
+            return_value={"mode": "ephemeral_key", "key_path": "/tmp/key", "marker": "m1"},
+        ) as prepare:
+            direct_auth = engine._warm_cached_direct_auth()
+
+    assert direct_auth == {"mode": "ephemeral_key", "key_path": "/tmp/key", "marker": "m1"}
+    prepare.assert_called_once_with(src_engine, dst_engine)
+    src_engine.connect.assert_called_once()
+    dst_engine.connect.assert_called_once()
+    src_engine.disconnect.assert_called_once()
+    dst_engine.disconnect.assert_called_once()
+
+
+def test_warm_cached_direct_auth_reuses_existing_cache():
+    src_site = _site("src")
+    dst_site = _site("dst")
+    logger = MagicMock()
+
+    from src.engines.remote_transfer_engine import RemoteToRemoteTransferEngine
+
+    engine = RemoteToRemoteTransferEngine(src_site, dst_site, logger, parallel_threshold=64)
+    engine._cached_direct_auth = {"mode": "ephemeral_key", "key_path": "/tmp/key", "marker": "m1"}
+
+    with patch("src.engines.remote_transfer_engine.SftpEngine") as engine_cls, patch.object(
+        RemoteToRemoteTransferEngine,
+        "_prepare_direct_auth",
+    ) as prepare:
+        direct_auth = engine._warm_cached_direct_auth()
+
+    assert direct_auth == {"mode": "ephemeral_key", "key_path": "/tmp/key", "marker": "m1"}
+    engine_cls.assert_not_called()
+    prepare.assert_not_called()

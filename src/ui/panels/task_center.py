@@ -220,7 +220,9 @@ class TaskCenterPanel(QWidget):
             status_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 3, status_item)
 
-            if task.kind.startswith("folder_") and task.subtask_count > 0:
+            if task.preparing and task.current_file:
+                progress_text = task.current_file
+            elif task.kind.startswith("folder_") and task.subtask_count > 0:
                 progress_text = f"{task.subtask_done}/{task.subtask_count} files ({task.progress_percent:.1f}%)"
                 if task.status == "running" and task.current_file:
                     progress_text += f" - {task.current_file}"

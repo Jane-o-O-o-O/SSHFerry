@@ -93,6 +93,9 @@ class RemoteToRemoteTransferEngine:
             0.1,
             float(os.getenv("SSHFERRY_REMOTE_DIRECT_PROGRESS_POLL_SECONDS", "0.5") or "0.5"),
         )
+        self._cached_direct_auth: dict[str, str] | None = None
+        self._cached_direct_auth_mode: str | None = None
+        self._direct_auth_lock = threading.Lock()
 
     def transfer_file(
         self,
@@ -102,59 +105,145 @@ class RemoteToRemoteTransferEngine:
         check_interrupt: Optional[Callable[[], bool]] = None,
         resume_offset: int = 0,
         requested_engine: str | None = None,
+        cleanup_cached_auth: bool = True,
     ) -> str:
         """Transfer one file. Returns transfer mode used: direct or relay."""
-        normalized_src = normalize_remote_path(src_path)
-        normalized_dst = normalize_remote_path(dst_path)
-        ensure_in_sandbox(normalized_src, self.src_site.remote_root)
-        ensure_in_sandbox(normalized_dst, self.dst_site.remote_root)
-        total = self._remote_file_size(normalized_src)
-        resume_offset = max(0, min(resume_offset, total))
-        requested_engine = (requested_engine or "auto").strip().lower()
-        if resume_offset >= total and total > 0:
-            if callback:
-                callback(total, total)
-            self.logger.info(
-                "remote_transfer_mode mode=bridge_resume_complete src=%s dst=%s bytes=%s resume_offset=%s",
-                normalized_src,
-                normalized_dst,
-                total,
-                resume_offset,
-            )
-            return "bridge_resume_complete"
-        if resume_offset > 0:
+        try:
+            normalized_src = normalize_remote_path(src_path)
+            normalized_dst = normalize_remote_path(dst_path)
+            ensure_in_sandbox(normalized_src, self.src_site.remote_root)
+            ensure_in_sandbox(normalized_dst, self.dst_site.remote_root)
+            total = self._remote_file_size(normalized_src)
+            resume_offset = max(0, min(resume_offset, total))
+            requested_engine = (requested_engine or "auto").strip().lower()
+            if resume_offset >= total and total > 0:
+                if callback:
+                    callback(total, total)
+                self.logger.info(
+                    "remote_transfer_mode mode=bridge_resume_complete src=%s dst=%s bytes=%s resume_offset=%s",
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                    resume_offset,
+                )
+                return "bridge_resume_complete"
+            if resume_offset > 0:
+                if self._can_attempt_direct_copy():
+                    try:
+                        self._transfer_file_direct_resume(
+                            normalized_src,
+                            normalized_dst,
+                            total,
+                            resume_offset,
+                            callback=callback,
+                            check_interrupt=check_interrupt,
+                        )
+                        self.logger.info(
+                            "remote_transfer_mode mode=direct_resume src=%s dst=%s bytes=%s resume_offset=%s",
+                            normalized_src,
+                            normalized_dst,
+                            total,
+                            resume_offset,
+                        )
+                        return "direct_resume"
+                    except SSHFerryError as exc:
+                        self.logger.warning(
+                            "remote_direct_resume_failed src=%s dst=%s resume_offset=%s reason=%s; falling back",
+                            normalized_src,
+                            normalized_dst,
+                            resume_offset,
+                            exc.message,
+                        )
+                self.logger.info(
+                    "remote_transfer_mode mode=bridge_resume src=%s dst=%s bytes=%s resume_offset=%s",
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                    resume_offset,
+                )
+                self._transfer_file_relay(
+                    normalized_src,
+                    normalized_dst,
+                    callback=callback,
+                    check_interrupt=check_interrupt,
+                    total=total,
+                    offset=resume_offset,
+                )
+                return "bridge_resume"
+            if requested_engine == "dualpath" and self.dualpath_enabled:
+                self.logger.info(
+                    "remote_transfer_mode mode=dualpath_forced src=%s dst=%s bytes=%s",
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                )
+                self._transfer_file_dualpath(
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                    callback=callback,
+                    check_interrupt=check_interrupt,
+                )
+                return "dualpath"
+            direct_unavailable_reason = self._direct_unavailable_reason()
             if self._can_attempt_direct_copy():
                 try:
-                    self._transfer_file_direct_resume(
-                        normalized_src,
-                        normalized_dst,
-                        total,
-                        resume_offset,
-                        callback=callback,
-                        check_interrupt=check_interrupt,
-                    )
+                    self._transfer_file_direct(normalized_src, normalized_dst, callback=callback, check_interrupt=check_interrupt)
                     self.logger.info(
-                        "remote_transfer_mode mode=direct_resume src=%s dst=%s bytes=%s resume_offset=%s",
+                        "remote_transfer_mode mode=direct src=%s dst=%s bytes=%s",
                         normalized_src,
                         normalized_dst,
                         total,
-                        resume_offset,
                     )
-                    return "direct_resume"
+                    return "direct"
                 except SSHFerryError as exc:
                     self.logger.warning(
-                        "remote_direct_resume_failed src=%s dst=%s resume_offset=%s reason=%s; falling back",
+                        "remote_direct_failed src=%s dst=%s reason=%s; falling back",
                         normalized_src,
                         normalized_dst,
-                        resume_offset,
                         exc.message,
                     )
+            if self.dualpath_enabled and total >= self.dualpath_threshold:
+                self.logger.info(
+                    "remote_transfer_mode mode=dualpath src=%s dst=%s bytes=%s direct_available=%s direct_reason=%s",
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                    self._can_attempt_direct_copy(),
+                    direct_unavailable_reason or "direct_failed_or_skipped",
+                )
+                self._transfer_file_dualpath(
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                    callback=callback,
+                    check_interrupt=check_interrupt,
+                )
+                return "dualpath"
+            if total >= self.parallel_threshold:
+                self.logger.info(
+                    "remote_transfer_mode mode=parallel_bridge src=%s dst=%s bytes=%s direct_available=%s direct_reason=%s",
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                    self._can_attempt_direct_copy(),
+                    direct_unavailable_reason or "direct_failed_or_skipped",
+                )
+                self._transfer_file_parallel_bridge(
+                    normalized_src,
+                    normalized_dst,
+                    total,
+                    callback=callback,
+                    check_interrupt=check_interrupt,
+                )
+                return "parallel_bridge"
             self.logger.info(
-                "remote_transfer_mode mode=bridge_resume src=%s dst=%s bytes=%s resume_offset=%s",
+                "remote_transfer_mode mode=bridge src=%s dst=%s bytes=%s direct_available=%s direct_reason=%s",
                 normalized_src,
                 normalized_dst,
                 total,
-                resume_offset,
+                self._can_attempt_direct_copy(),
+                direct_unavailable_reason or "direct_failed_or_skipped",
             )
             self._transfer_file_relay(
                 normalized_src,
@@ -162,92 +251,11 @@ class RemoteToRemoteTransferEngine:
                 callback=callback,
                 check_interrupt=check_interrupt,
                 total=total,
-                offset=resume_offset,
             )
-            return "bridge_resume"
-        if requested_engine == "dualpath" and self.dualpath_enabled:
-            self.logger.info(
-                "remote_transfer_mode mode=dualpath_forced src=%s dst=%s bytes=%s",
-                normalized_src,
-                normalized_dst,
-                total,
-            )
-            self._transfer_file_dualpath(
-                normalized_src,
-                normalized_dst,
-                total,
-                callback=callback,
-                check_interrupt=check_interrupt,
-            )
-            return "dualpath"
-        direct_unavailable_reason = self._direct_unavailable_reason()
-        if self._can_attempt_direct_copy():
-            try:
-                self._transfer_file_direct(normalized_src, normalized_dst, callback=callback, check_interrupt=check_interrupt)
-                self.logger.info(
-                    "remote_transfer_mode mode=direct src=%s dst=%s bytes=%s",
-                    normalized_src,
-                    normalized_dst,
-                    total,
-                )
-                return "direct"
-            except SSHFerryError as exc:
-                self.logger.warning(
-                    "remote_direct_failed src=%s dst=%s reason=%s; falling back",
-                    normalized_src,
-                    normalized_dst,
-                    exc.message,
-                )
-        if self.dualpath_enabled and total >= self.dualpath_threshold:
-            self.logger.info(
-                "remote_transfer_mode mode=dualpath src=%s dst=%s bytes=%s direct_available=%s direct_reason=%s",
-                normalized_src,
-                normalized_dst,
-                total,
-                self._can_attempt_direct_copy(),
-                direct_unavailable_reason or "direct_failed_or_skipped",
-            )
-            self._transfer_file_dualpath(
-                normalized_src,
-                normalized_dst,
-                total,
-                callback=callback,
-                check_interrupt=check_interrupt,
-            )
-            return "dualpath"
-        if total >= self.parallel_threshold:
-            self.logger.info(
-                "remote_transfer_mode mode=parallel_bridge src=%s dst=%s bytes=%s direct_available=%s direct_reason=%s",
-                normalized_src,
-                normalized_dst,
-                total,
-                self._can_attempt_direct_copy(),
-                direct_unavailable_reason or "direct_failed_or_skipped",
-            )
-            self._transfer_file_parallel_bridge(
-                normalized_src,
-                normalized_dst,
-                total,
-                callback=callback,
-                check_interrupt=check_interrupt,
-            )
-            return "parallel_bridge"
-        self.logger.info(
-            "remote_transfer_mode mode=bridge src=%s dst=%s bytes=%s direct_available=%s direct_reason=%s",
-            normalized_src,
-            normalized_dst,
-            total,
-            self._can_attempt_direct_copy(),
-            direct_unavailable_reason or "direct_failed_or_skipped",
-        )
-        self._transfer_file_relay(
-            normalized_src,
-            normalized_dst,
-            callback=callback,
-            check_interrupt=check_interrupt,
-            total=total,
-        )
-        return "bridge"
+            return "bridge"
+        finally:
+            if cleanup_cached_auth:
+                self._cleanup_cached_direct_auth()
 
     def transfer_dir(
         self,
@@ -258,47 +266,50 @@ class RemoteToRemoteTransferEngine:
         item_callback: Optional[Callable[[str, str, int], None]] = None,
     ) -> str:
         """Transfer a directory recursively. Returns transfer mode used."""
-        normalized_src = normalize_remote_path(src_dir)
-        normalized_dst = normalize_remote_path(dst_dir)
-        ensure_in_sandbox(normalized_src, self.src_site.remote_root)
-        ensure_in_sandbox(normalized_dst, self.dst_site.remote_root)
-        dir_plan = self._plan_remote_dir_transfer(normalized_src, normalized_dst)
-        if self._should_use_mixed_dir_transfer(dir_plan):
+        try:
+            normalized_src = normalize_remote_path(src_dir)
+            normalized_dst = normalize_remote_path(dst_dir)
+            ensure_in_sandbox(normalized_src, self.src_site.remote_root)
+            ensure_in_sandbox(normalized_dst, self.dst_site.remote_root)
+            dir_plan = self._plan_remote_dir_transfer(normalized_src, normalized_dst)
+            if self._should_use_mixed_dir_transfer(dir_plan):
+                try:
+                    self._transfer_dir_mixed(
+                        normalized_src,
+                        normalized_dst,
+                        dir_plan,
+                        callback=callback,
+                        check_interrupt=check_interrupt,
+                        item_callback=item_callback,
+                    )
+                    return "dir_mixed"
+                except SSHFerryError as exc:
+                    self.logger.warning(
+                        "remote_mixed_dir_failed src=%s dst=%s reason=%s; falling back",
+                        normalized_src,
+                        normalized_dst,
+                        exc.message,
+                    )
             try:
-                self._transfer_dir_mixed(
+                self._transfer_dir_direct(
                     normalized_src,
                     normalized_dst,
-                    dir_plan,
+                    callback=callback,
+                    check_interrupt=check_interrupt,
+                )
+                return "direct"
+            except SSHFerryError as exc:
+                self.logger.warning("remote_direct_dir_failed src=%s dst=%s reason=%s", normalized_src, normalized_dst, exc.message)
+                self._transfer_dir_relay(
+                    normalized_src,
+                    normalized_dst,
                     callback=callback,
                     check_interrupt=check_interrupt,
                     item_callback=item_callback,
                 )
-                return "dir_mixed"
-            except SSHFerryError as exc:
-                self.logger.warning(
-                    "remote_mixed_dir_failed src=%s dst=%s reason=%s; falling back",
-                    normalized_src,
-                    normalized_dst,
-                    exc.message,
-                )
-        try:
-            self._transfer_dir_direct(
-                normalized_src,
-                normalized_dst,
-                callback=callback,
-                check_interrupt=check_interrupt,
-            )
-            return "direct"
-        except SSHFerryError as exc:
-            self.logger.warning("remote_direct_dir_failed src=%s dst=%s reason=%s", normalized_src, normalized_dst, exc.message)
-            self._transfer_dir_relay(
-                normalized_src,
-                normalized_dst,
-                callback=callback,
-                check_interrupt=check_interrupt,
-                item_callback=item_callback,
-            )
-            return "bridge"
+                return "bridge"
+        finally:
+            self._cleanup_cached_direct_auth()
 
     def _transfer_file_direct(
         self,
@@ -359,8 +370,6 @@ class RemoteToRemoteTransferEngine:
             )
             raise
         finally:
-            if direct_auth and direct_auth.get("mode") == "ephemeral_key":
-                self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
             dst_engine.disconnect()
             src_engine.disconnect()
 
@@ -423,8 +432,6 @@ class RemoteToRemoteTransferEngine:
             )
             raise
         finally:
-            if direct_auth and direct_auth.get("mode") == "ephemeral_key":
-                self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
             dst_engine.disconnect()
             src_engine.disconnect()
 
@@ -488,8 +495,6 @@ class RemoteToRemoteTransferEngine:
             )
             raise
         finally:
-            if direct_auth and direct_auth.get("mode") == "ephemeral_key":
-                self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
             dst_engine.disconnect()
             src_engine.disconnect()
 
@@ -699,121 +704,126 @@ class RemoteToRemoteTransferEngine:
         check_interrupt: Optional[Callable[[], bool]] = None,
         item_callback: Optional[Callable[[str, str, int], None]] = None,
     ) -> int:
-        total = int(dir_plan["total_bytes"])
-        large_files: list[dict[str, object]] = list(dir_plan["large_files"])
-        small_batches: list[dict[str, object]] = list(dir_plan["small_batches"])
-        directories: list[str] = list(dir_plan["directories"])
+        try:
+            total = int(dir_plan["total_bytes"])
+            large_files: list[dict[str, object]] = list(dir_plan["large_files"])
+            small_batches: list[dict[str, object]] = list(dir_plan["small_batches"])
+            directories: list[str] = list(dir_plan["directories"])
 
-        self._ensure_remote_directories_for_plan(dst_dir, directories)
-        if small_batches:
-            self._probe_direct_bundle_support(dst_dir)
+            self._ensure_remote_directories_for_plan(dst_dir, directories)
+            if small_batches:
+                self._warm_cached_direct_auth()
+                self._probe_direct_bundle_support(dst_dir)
 
-        if callback:
-            callback(0, total)
-
-        transferred: dict[str, int] = {}
-        progress_lock = threading.Lock()
-        stop_state = {"triggered": False}
-        first_error: list[Exception] = []
-        large_slots = threading.Semaphore(self.folder_large_file_workers)
-        bundle_slots = threading.Semaphore(self.folder_bundle_workers)
-
-        def add_progress(work_key: str, absolute_done: int) -> None:
-            with progress_lock:
-                previous = transferred.get(work_key, 0)
-                delta = max(0, absolute_done - previous)
-                transferred[work_key] = absolute_done
-                current_done = min(total, sum(transferred.values()))
             if callback:
-                callback(current_done, total)
+                callback(0, total)
 
-        def run_large_file(file_plan: dict[str, object]) -> None:
-            work_key = str(file_plan["src"])
-            if check_interrupt and check_interrupt():
-                raise InterruptedError("Task interrupted")
-            with large_slots:
-                if item_callback:
-                    item_callback("start", os.path.basename(str(file_plan["src"])), 1)
-                self.logger.info(
-                    "remote_dir_mode mode=dir_large_file src=%s dst=%s bytes=%s",
-                    file_plan["src"],
-                    file_plan["dst"],
-                    file_plan["size"],
-                )
-                self.transfer_file(
-                    str(file_plan["src"]),
-                    str(file_plan["dst"]),
-                    callback=lambda done, _total, key=work_key: add_progress(key, done),
-                    check_interrupt=check_interrupt,
-                )
-                add_progress(work_key, int(file_plan["size"]))
-                if item_callback:
-                    item_callback("complete", os.path.basename(str(file_plan["src"])), 1)
+            transferred: dict[str, int] = {}
+            progress_lock = threading.Lock()
+            stop_state = {"triggered": False}
+            first_error: list[Exception] = []
+            large_slots = threading.Semaphore(self.folder_large_file_workers)
+            bundle_slots = threading.Semaphore(self.folder_bundle_workers)
 
-        def run_small_bundle(batch_plan: dict[str, object]) -> None:
-            work_key = str(batch_plan["bundle_id"])
-            if check_interrupt and check_interrupt():
-                raise InterruptedError("Task interrupted")
-            with bundle_slots:
-                bundle_label = f"{len(batch_plan['files'])} files"
-                if item_callback:
-                    item_callback("start", bundle_label, 0)
-                self.logger.info(
-                    "remote_dir_mode mode=dir_small_bundle src=%s dst=%s files=%s bytes=%s bundle=%s",
-                    src_dir,
-                    dst_dir,
-                    len(batch_plan["files"]),
-                    batch_plan["total_bytes"],
-                    batch_plan["bundle_id"],
-                )
-                self._transfer_small_file_bundle(
-                    src_dir,
-                    dst_dir,
-                    batch_plan["files"],
-                    bundle_id=work_key,
-                    progress_callback=lambda done, _total, key=work_key: add_progress(key, done),
-                    check_interrupt=check_interrupt,
-                )
-                add_progress(work_key, int(batch_plan["total_bytes"]))
-                if item_callback:
-                    item_callback("complete", bundle_label, len(batch_plan["files"]))
+            def add_progress(work_key: str, absolute_done: int) -> None:
+                with progress_lock:
+                    previous = transferred.get(work_key, 0)
+                    delta = max(0, absolute_done - previous)
+                    transferred[work_key] = absolute_done
+                    current_done = min(total, sum(transferred.values()))
+                if callback:
+                    callback(current_done, total)
 
-        def worker(job: tuple[str, dict[str, object]]) -> None:
-            if stop_state["triggered"]:
-                return
-            try:
-                job_type, payload = job
-                if job_type == "large":
-                    run_large_file(payload)
-                else:
-                    run_small_bundle(payload)
-            except Exception as exc:
-                if not first_error:
-                    first_error.append(exc)
-                stop_state["triggered"] = True
-                raise
+            def run_large_file(file_plan: dict[str, object]) -> None:
+                work_key = str(file_plan["src"])
+                if check_interrupt and check_interrupt():
+                    raise InterruptedError("Task interrupted")
+                with large_slots:
+                    if item_callback:
+                        item_callback("start", os.path.basename(str(file_plan["src"])), 1)
+                    self.logger.info(
+                        "remote_dir_mode mode=dir_large_file src=%s dst=%s bytes=%s",
+                        file_plan["src"],
+                        file_plan["dst"],
+                        file_plan["size"],
+                    )
+                    self.transfer_file(
+                        str(file_plan["src"]),
+                        str(file_plan["dst"]),
+                        callback=lambda done, _total, key=work_key: add_progress(key, done),
+                        check_interrupt=check_interrupt,
+                        cleanup_cached_auth=False,
+                    )
+                    add_progress(work_key, int(file_plan["size"]))
+                    if item_callback:
+                        item_callback("complete", os.path.basename(str(file_plan["src"])), 1)
 
-        jobs: list[tuple[str, dict[str, object]]] = [("large", item) for item in large_files]
-        jobs.extend(("bundle", item) for item in small_batches)
-        if not jobs:
-            return 0
+            def run_small_bundle(batch_plan: dict[str, object]) -> None:
+                work_key = str(batch_plan["bundle_id"])
+                if check_interrupt and check_interrupt():
+                    raise InterruptedError("Task interrupted")
+                with bundle_slots:
+                    bundle_label = f"{len(batch_plan['files'])} files"
+                    if item_callback:
+                        item_callback("start", bundle_label, 0)
+                    self.logger.info(
+                        "remote_dir_mode mode=dir_small_bundle src=%s dst=%s files=%s bytes=%s bundle=%s",
+                        src_dir,
+                        dst_dir,
+                        len(batch_plan["files"]),
+                        batch_plan["total_bytes"],
+                        batch_plan["bundle_id"],
+                    )
+                    self._transfer_small_file_bundle(
+                        src_dir,
+                        dst_dir,
+                        batch_plan["files"],
+                        bundle_id=work_key,
+                        progress_callback=lambda done, _total, key=work_key: add_progress(key, done),
+                        check_interrupt=check_interrupt,
+                    )
+                    add_progress(work_key, int(batch_plan["total_bytes"]))
+                    if item_callback:
+                        item_callback("complete", bundle_label, len(batch_plan["files"]))
 
-        worker_count = max(
-            1,
-            min(len(jobs), self.folder_large_file_workers + self.folder_bundle_workers),
-        )
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = [executor.submit(worker, job) for job in jobs]
-            wait(futures)
+            def worker(job: tuple[str, dict[str, object]]) -> None:
+                if stop_state["triggered"]:
+                    return
+                try:
+                    job_type, payload = job
+                    if job_type == "large":
+                        run_large_file(payload)
+                    else:
+                        run_small_bundle(payload)
+                except Exception as exc:
+                    if not first_error:
+                        first_error.append(exc)
+                    stop_state["triggered"] = True
+                    raise
 
-        if first_error:
-            error = first_error[0]
-            if isinstance(error, InterruptedError):
-                raise error
-            if isinstance(error, SSHFerryError):
-                raise error
-            raise SSHFerryError(ErrorCode.TRANSFER_FAILED, str(error))
-        return sum(transferred.values())
+            jobs: list[tuple[str, dict[str, object]]] = [("large", item) for item in large_files]
+            jobs.extend(("bundle", item) for item in small_batches)
+            if not jobs:
+                return 0
+
+            worker_count = max(
+                1,
+                min(len(jobs), self.folder_large_file_workers + self.folder_bundle_workers),
+            )
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = [executor.submit(worker, job) for job in jobs]
+                wait(futures)
+
+            if first_error:
+                error = first_error[0]
+                if isinstance(error, InterruptedError):
+                    raise error
+                if isinstance(error, SSHFerryError):
+                    raise error
+                raise SSHFerryError(ErrorCode.TRANSFER_FAILED, str(error))
+            return sum(transferred.values())
+        finally:
+            self._cleanup_cached_direct_auth()
 
     def _stream_file_between_engines(
         self,
@@ -1568,8 +1578,6 @@ class RemoteToRemoteTransferEngine:
                     self._format_direct_failure("bundle_probe", exit_code, std_out, std_err),
                 )
         finally:
-            if direct_auth and direct_auth.get("mode") == "ephemeral_key":
-                self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
             dst_engine.disconnect()
             src_engine.disconnect()
 
@@ -1640,8 +1648,6 @@ class RemoteToRemoteTransferEngine:
                 self._cleanup_remote_temp_dir(dst_engine, temp_dir)
             except Exception:
                 pass
-            if direct_auth and direct_auth.get("mode") == "ephemeral_key":
-                self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
             dst_engine.disconnect()
             src_engine.disconnect()
 
@@ -2001,13 +2007,60 @@ class RemoteToRemoteTransferEngine:
         self,
         src_engine: SftpEngine,
         dst_engine: SftpEngine,
+        *,
+        reuse_cached: bool = True,
     ) -> dict[str, str] | None:
-        remote_key_path = self._remote_usable_path(self.dst_site.key_path)
-        if remote_key_path:
-            return {"mode": "site_key", "key_path": remote_key_path}
-        if not self.direct_ephemeral_key_enabled:
-            return None
-        return self._bootstrap_ephemeral_direct_key(src_engine, dst_engine)
+        with self._direct_auth_lock:
+            if reuse_cached and self._cached_direct_auth is not None:
+                return self._cached_direct_auth
+            remote_key_path = self._remote_usable_path(self.dst_site.key_path)
+            if remote_key_path:
+                direct_auth = {"mode": "site_key", "key_path": remote_key_path}
+                if reuse_cached:
+                    self._cached_direct_auth = direct_auth
+                    self._cached_direct_auth_mode = "site_key"
+                return direct_auth
+            if not self.direct_ephemeral_key_enabled:
+                return None
+            direct_auth = self._bootstrap_ephemeral_direct_key(src_engine, dst_engine)
+            if reuse_cached:
+                self._cached_direct_auth = direct_auth
+                self._cached_direct_auth_mode = direct_auth.get("mode")
+            return direct_auth
+
+    def _cleanup_cached_direct_auth(self) -> None:
+        with self._direct_auth_lock:
+            direct_auth = self._cached_direct_auth
+            self._cached_direct_auth = None
+            self._cached_direct_auth_mode = None
+        if not direct_auth or direct_auth.get("mode") != "ephemeral_key":
+            return
+        src_engine = SftpEngine(self.src_site, self.logger)
+        dst_engine = SftpEngine(self.dst_site, self.logger)
+        try:
+            src_engine.connect()
+            dst_engine.connect()
+            self._cleanup_direct_auth(src_engine, dst_engine, direct_auth)
+        except Exception as exc:
+            self.logger.warning("remote_direct_cleanup_failed mode=cached auth=%s error=%s", self._direct_auth_label(direct_auth), exc)
+        finally:
+            dst_engine.disconnect()
+            src_engine.disconnect()
+
+    def _warm_cached_direct_auth(self) -> dict[str, str] | None:
+        with self._direct_auth_lock:
+            cached = self._cached_direct_auth
+        if cached is not None:
+            return cached
+        src_engine = SftpEngine(self.src_site, self.logger)
+        dst_engine = SftpEngine(self.dst_site, self.logger)
+        try:
+            src_engine.connect()
+            dst_engine.connect()
+            return self._prepare_direct_auth(src_engine, dst_engine)
+        finally:
+            dst_engine.disconnect()
+            src_engine.disconnect()
 
     def _bootstrap_ephemeral_direct_key(
         self,

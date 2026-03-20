@@ -105,6 +105,7 @@ class Task:
 
     bytes_done: int = 0
     status: str = "pending"  # pending, running, paused, done, failed, canceled, skipped
+    preparing: bool = False
     retries: int = 0
     error_code: Optional[ErrorCode] = None
     error_message: Optional[str] = None

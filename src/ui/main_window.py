@@ -151,6 +151,36 @@ class ScanRemoteDirThread(QThread):
         return total_files, total_bytes
 
 
+class ScanLocalDirThread(QThread):
+    scan_completed = Signal(str, int, int)
+    scan_failed = Signal(str, str)
+
+    def __init__(self, local_path: str):
+        super().__init__()
+        self.local_path = local_path
+
+    def run(self):
+        try:
+            total_files, total_bytes = self._scan_recursive(self.local_path)
+            self.scan_completed.emit(self.local_path, total_files, total_bytes)
+        except Exception as exc:
+            self.scan_failed.emit(self.local_path, str(exc))
+
+    def _scan_recursive(self, path: str) -> tuple[int, int]:
+        total_files = 0
+        total_bytes = 0
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if entry.is_file(follow_symlinks=False):
+                    total_files += 1
+                    total_bytes += entry.stat(follow_symlinks=False).st_size
+                elif entry.is_dir(follow_symlinks=False):
+                    sub_files, sub_bytes = self._scan_recursive(entry.path)
+                    total_files += sub_files
+                    total_bytes += sub_bytes
+        return total_files, total_bytes
+
+
 @dataclass
 class RemoteSession:
     session_id: str
@@ -950,17 +980,30 @@ class MainWindow(QMainWindow):
         if not session:
             return
         remote_dir = join_remote_path(remote_parent, os.path.basename(local_dir))
-        total_files, total_bytes = self._scan_local_dir(local_dir)
         task = TaskScheduler.create_folder_upload_task(
             local_dir,
             remote_dir,
-            total_files,
-            total_bytes,
+            0,
+            0,
             dst_site=session.site,
             dst_session_id=session.session_id,
             dst_display_name=session.site.name,
         )
+        task.preparing = True
+        task.current_file = "Scanning local directory..."
         self.scheduler.add_task(task)
+        thread = ScanLocalDirThread(local_dir)
+
+        def on_scanned(_path: str, total_files: int, total_bytes: int, task_id=task.task_id):
+            self.scheduler.finish_preparing_task(task_id, total_files, total_bytes)
+
+        def on_failed(path: str, message: str, task_id=task.task_id):
+            self.scheduler.fail_preparing_task(task_id, f"Local scan failed ({path}): {message}")
+            self._log(f"Local scan failed ({path}): {message}")
+
+        thread.scan_completed.connect(on_scanned)
+        thread.scan_failed.connect(on_failed)
+        self._start_thread(thread)
 
     def _download_entry(self, session_id: str, entry: RemoteEntry):
         local_dir = self.local_panel.get_current_dir()
@@ -1011,26 +1054,30 @@ class MainWindow(QMainWindow):
         session = self.sessions.get(session_id)
         if not session:
             return
+        local_dir = os.path.join(local_parent, os.path.basename(remote_dir.rstrip("/")))
+        task = TaskScheduler.create_folder_download_task(
+            remote_dir,
+            local_dir,
+            0,
+            0,
+            src_site=session.site,
+            src_session_id=session.session_id,
+            src_display_name=session.site.name,
+        )
+        task.preparing = True
+        task.current_file = "Scanning remote directory..."
+        self.scheduler.add_task(task)
         thread = ScanRemoteDirThread(session.site, remote_dir)
 
-        def on_scanned(path: str, total_files: int, total_bytes: int, sid=session_id):
-            session_obj = self.sessions.get(sid)
-            if not session_obj:
-                return
-            local_dir = os.path.join(local_parent, os.path.basename(path.rstrip("/")))
-            task = TaskScheduler.create_folder_download_task(
-                path,
-                local_dir,
-                max(1, total_files),
-                total_bytes,
-                src_site=session_obj.site,
-                src_session_id=session_obj.session_id,
-                src_display_name=session_obj.site.name,
-            )
-            self.scheduler.add_task(task)
+        def on_scanned(_path: str, total_files: int, total_bytes: int, task_id=task.task_id):
+            self.scheduler.finish_preparing_task(task_id, total_files, total_bytes)
+
+        def on_failed(path: str, msg: str, task_id=task.task_id):
+            self.scheduler.fail_preparing_task(task_id, f"Download scan failed ({path}): {msg}")
+            self._log(f"Download scan failed ({path}): {msg}")
 
         thread.scan_completed.connect(on_scanned)
-        thread.scan_failed.connect(lambda path, msg: self._log(f"Download scan failed ({path}): {msg}"))
+        thread.scan_failed.connect(on_failed)
         self._start_thread(thread)
 
     def _remote_to_remote_drop(self, src_session_id: str, dst_session_id: str, remote_paths: list[str], target_item: QTreeWidgetItem = None):
@@ -1063,38 +1110,31 @@ class MainWindow(QMainWindow):
             self.scheduler.add_task(task)
 
     def _enqueue_remote_dir_transfer(self, src_session: RemoteSession, dst_session: RemoteSession, src_dir: str, dst_dir: str):
+        task = TaskScheduler.create_folder_remote_to_remote_task(
+            src_dir,
+            dst_dir,
+            0,
+            0,
+            src_site=src_session.site,
+            dst_site=dst_session.site,
+            src_session_id=src_session.session_id,
+            dst_session_id=dst_session.session_id,
+        )
+        task.preparing = True
+        task.current_file = "Scanning remote directory..."
+        self.scheduler.add_task(task)
         thread = ScanRemoteDirThread(src_session.site, src_dir)
 
-        def on_scanned(path: str, total_files: int, total_bytes: int):
-            task = TaskScheduler.create_folder_remote_to_remote_task(
-                path,
-                dst_dir,
-                max(1, total_files),
-                total_bytes,
-                src_site=src_session.site,
-                dst_site=dst_session.site,
-                src_session_id=src_session.session_id,
-                dst_session_id=dst_session.session_id,
-            )
-            self.scheduler.add_task(task)
+        def on_scanned(_path: str, total_files: int, total_bytes: int, task_id=task.task_id):
+            self.scheduler.finish_preparing_task(task_id, total_files, total_bytes)
+
+        def on_failed(path: str, msg: str, task_id=task.task_id):
+            self.scheduler.fail_preparing_task(task_id, f"Remote transfer scan failed ({path}): {msg}")
+            self._log(f"Remote transfer scan failed ({path}): {msg}")
 
         thread.scan_completed.connect(on_scanned)
-        thread.scan_failed.connect(lambda path, msg: self._log(f"Remote transfer scan failed ({path}): {msg}"))
+        thread.scan_failed.connect(on_failed)
         self._start_thread(thread)
-
-    def _scan_local_dir(self, path: str) -> tuple[int, int]:
-        total_files = 0
-        total_bytes = 0
-        for name in os.listdir(path):
-            full = os.path.join(path, name)
-            if os.path.isfile(full):
-                total_files += 1
-                total_bytes += os.path.getsize(full)
-            elif os.path.isdir(full):
-                sub_files, sub_bytes = self._scan_local_dir(full)
-                total_files += sub_files
-                total_bytes += sub_bytes
-        return total_files, total_bytes
 
     def _find_remote_entry_by_path(self, panel: RemotePanel, remote_path: str) -> Optional[RemoteEntry]:
         tree = panel.tree

@@ -129,6 +129,51 @@ def test_restart_done_folder_task_resets_subtask_counters():
     assert task.subtask_count == 3
 
 
+def test_add_task_does_not_queue_preparing_task():
+    scheduler = create_mock_scheduler()
+    task = Task(
+        task_id="prep1",
+        kind="folder_transfer",
+        engine="sftp",
+        src="local/folder",
+        dst="/remote/folder",
+        bytes_total=0,
+        preparing=True,
+        current_file="Preparing directory...",
+    )
+
+    scheduler.add_task(task)
+
+    assert scheduler.pending_task_count() == 0
+    with scheduler.task_lock:
+        assert "prep1" in scheduler.tasks
+
+
+def test_finish_preparing_task_queues_folder_transfer():
+    scheduler = create_mock_scheduler()
+    task = Task(
+        task_id="prep2",
+        kind="folder_transfer",
+        engine="sftp",
+        src="local/folder",
+        dst="/remote/folder",
+        bytes_total=0,
+        preparing=True,
+        current_file="Preparing directory...",
+    )
+    scheduler.add_task(task)
+
+    assert scheduler.finish_preparing_task("prep2", 3, 1024) is True
+
+    with scheduler.task_lock:
+        prepared = scheduler.tasks["prep2"]
+        assert prepared.preparing is False
+        assert prepared.subtask_count == 3
+        assert prepared.bytes_total == 1024
+        assert prepared.current_file == ""
+    assert scheduler.pending_task_count() == 1
+
+
 def test_resume_paused_folder_task_rebuilds_aggregate_progress():
     mock_scheduler = create_mock_scheduler()
     task = Task(
@@ -492,6 +537,57 @@ def test_folder_upload_mixed_keeps_resumable_small_files_out_of_bundle(tmp_path)
 
     assert bundle_calls == [["b.txt"]]
     assert uploads == [(str(local_dir / "a.txt"), "/remote/a.txt", 2)]
+    assert task.subtask_done == 2
+    assert task.bytes_done == 8
+
+
+def test_folder_upload_mixed_skips_per_file_probe_when_remote_tree_is_empty(tmp_path):
+    scheduler = create_mock_scheduler()
+    scheduler.folder_bundle_file_count_threshold = 2
+    scheduler.parallel_threshold = 16
+    local_dir = tmp_path / "up_empty_tree_mixed"
+    local_dir.mkdir()
+    (local_dir / "a.txt").write_text("aaaa", encoding="utf-8")
+    (local_dir / "b.txt").write_text("bbbb", encoding="utf-8")
+
+    task = Task(
+        task_id="fu_empty_tree_mixed",
+        kind="folder_transfer",
+        engine="sftp",
+        src=str(local_dir),
+        dst="/remote",
+        bytes_total=8,
+        subtask_count=2,
+        dst_site_snapshot=scheduler.site_config,
+    )
+    task.start_time = time.time()
+
+    class BootstrapEngine:
+        ssh_client = object()
+        sftp_client = object()
+
+        def mkdir(self, _path):
+            return None
+
+        def stat(self, _path):
+            raise AssertionError("per-file stat should be skipped when remote tree is empty")
+
+        @property
+        def site_config(self):
+            return scheduler.site_config
+
+    bundle_calls: list[list[str]] = []
+
+    with patch.object(scheduler, "_remote_tree_appears_empty", return_value=True):
+        with patch.object(scheduler, "_probe_remote_folder_bundle_support", return_value=None):
+            with patch.object(
+                scheduler,
+                "_transfer_folder_upload_bundle",
+                side_effect=lambda *args, **kwargs: bundle_calls.append([item["rel_path"] for item in args[4]]),
+            ):
+                scheduler._upload_dir_recursive(BootstrapEngine(), task, str(local_dir), "/remote")
+
+    assert bundle_calls == [["a.txt", "b.txt"]]
     assert task.subtask_done == 2
     assert task.bytes_done == 8
 

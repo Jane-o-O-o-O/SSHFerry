@@ -153,11 +153,41 @@ class TaskScheduler:
         task = self._normalize_task(task)
         with self.task_lock:
             self.tasks[task.task_id] = task
-            if task.task_id not in self.queued_task_ids:
+            if task.status == "pending" and not task.preparing and task.task_id not in self.queued_task_ids:
                 self.task_queue.append(task.task_id)
                 self.queued_task_ids.add(task.task_id)
         self.logger.info("Added task %s: %s %s -> %s", task.task_id, task.kind, task.src, task.dst)
         return task.task_id
+
+    def finish_preparing_task(self, task_id: str, total_files: int, total_bytes: int) -> bool:
+        with self.task_lock:
+            task = self.tasks.get(task_id)
+            if not task or task.is_finished:
+                return False
+            task.subtask_count = max(1, total_files)
+            task.bytes_total = total_bytes
+            task.preparing = False
+            if task.current_file.startswith("Preparing"):
+                task.current_file = ""
+            if task.status == "pending" and task.task_id not in self.queued_task_ids:
+                self.task_queue.append(task.task_id)
+                self.queued_task_ids.add(task.task_id)
+            return True
+
+    def fail_preparing_task(self, task_id: str, message: str) -> bool:
+        with self.task_lock:
+            task = self.tasks.get(task_id)
+            if not task or task.is_finished:
+                return False
+            task.preparing = False
+            task.current_file = ""
+            task.error_message = message
+            task.error_code = ErrorCode.UNKNOWN_ERROR
+            self._set_task_status_locked(task, "failed")
+            if task_id in self.queued_task_ids:
+                self.task_queue = [tid for tid in self.task_queue if tid != task_id]
+                self.queued_task_ids.discard(task_id)
+            return True
 
     def get_task(self, task_id: str) -> Optional[Task]:
         with self.task_lock:
@@ -285,6 +315,8 @@ class TaskScheduler:
             for idx, task_id in enumerate(self.task_queue):
                 task = self.tasks.get(task_id)
                 if not task or task.status != "pending":
+                    continue
+                if task.preparing:
                     continue
                 if self._task_protocol(task) != protocol:
                     continue
@@ -1024,6 +1056,7 @@ class TaskScheduler:
                 direction="download",
                 local_root=local_dir,
                 remote_root=remote_dir,
+                probe_engine=engine,
             )
             return
         self._run_local_folder_transfer_workers(task, files, direction="download")
@@ -1176,13 +1209,17 @@ class TaskScheduler:
             task.dst_site_snapshot if direction == "upload" else task.src_site_snapshot,
             f"folder {direction} endpoint",
         )
-        bundle_files, worker_files = self._partition_local_folder_small_files(
-            task,
-            site,
-            small_files,
-            direction=direction,
-            probe_engine=probe_engine,
-        )
+        if direction == "upload" and self._remote_tree_appears_empty(probe_engine, remote_root):
+            bundle_files = list(small_files)
+            worker_files: list[tuple[str, str, bool, int]] = []
+        else:
+            bundle_files, worker_files = self._partition_local_folder_small_files(
+                task,
+                site,
+                small_files,
+                direction=direction,
+                probe_engine=probe_engine,
+            )
         if worker_files:
             self._run_local_folder_transfer_workers(
                 task,
@@ -1193,7 +1230,7 @@ class TaskScheduler:
         if not bundle_files:
             return
         try:
-            self._probe_remote_folder_bundle_support(site)
+            self._probe_remote_folder_bundle_support(site, engine=probe_engine)
         except SSHFerryError as exc:
             self.logger.warning(
                 "folder_bundle_unavailable direction=%s root=%s reason=%s; falling back to per-file",
@@ -1213,6 +1250,7 @@ class TaskScheduler:
         transferred: dict[str, int] = {}
         progress_lock = Lock()
         small_batches = list(self._build_local_folder_mixed_plan(bundle_files)["small_batches"])
+        bundle_engine = probe_engine
 
         def add_bundle_progress(bundle_key: str, label: str, absolute_done: int) -> None:
             with self.task_lock, progress_lock:
@@ -1247,6 +1285,7 @@ class TaskScheduler:
                         local_root,
                         remote_root,
                         batch["files"],
+                        engine=bundle_engine,
                         bundle_id=bundle_key,
                         add_progress=lambda done, _label=bundle_label, _key=bundle_key: add_bundle_progress(_key, _label, done),
                     )
@@ -1257,6 +1296,7 @@ class TaskScheduler:
                         remote_root,
                         local_root,
                         batch["files"],
+                        engine=bundle_engine,
                         bundle_id=bundle_key,
                         add_progress=lambda done, _label=bundle_label, _key=bundle_key: add_bundle_progress(_key, _label, done),
                     )
@@ -1292,11 +1332,11 @@ class TaskScheduler:
         check_interrupt = self._interrupt_checker(task)
         bundle_files: list[dict[str, object]] = []
         worker_files: list[tuple[str, str, bool, int]] = []
-        inspector = None
+        inspector = probe_engine if direction == "upload" and probe_engine is not None else None
         should_disconnect = False
-        if direction == "upload":
-            inspector = probe_engine if probe_engine is not None and not hasattr(probe_engine, "connect") else SftpEngine(site, self.logger)
-            should_disconnect = inspector is not probe_engine
+        if direction == "upload" and inspector is None:
+            inspector = SftpEngine(site, self.logger)
+            should_disconnect = True
             if should_disconnect:
                 inspector.connect()
         try:
@@ -1314,6 +1354,22 @@ class TaskScheduler:
             if should_disconnect and inspector is not None:
                 inspector.disconnect()
         return bundle_files, worker_files
+
+    def _remote_tree_appears_empty(self, engine: Optional[SftpEngine], remote_root: str) -> bool:
+        if not self._can_reuse_bundle_engine(engine) or not getattr(engine, "ssh_client", None):
+            return False
+        check_cmd = (
+            "sh -lc "
+            + shlex.quote(
+                f"if find {shlex.quote(remote_root)} -type f -print -quit 2>/dev/null | grep -q .; then "
+                "printf 1; else printf 0; fi"
+            )
+        )
+        try:
+            exit_code, std_out, _std_err = self._exec_remote_shell(engine, check_cmd)
+        except Exception:
+            return False
+        return exit_code == 0 and std_out.strip() == "0"
 
     def _run_local_folder_transfer_workers(
         self,
@@ -1432,8 +1488,8 @@ class TaskScheduler:
         release_parallel_slot,
         probe_engine: Optional[SftpEngine] = None,
     ) -> None:
-        inspector = probe_engine if probe_engine is not None and not hasattr(probe_engine, "connect") else SftpEngine(site, self.logger)
-        should_disconnect = inspector is not probe_engine
+        inspector = probe_engine if probe_engine is not None else SftpEngine(site, self.logger)
+        should_disconnect = probe_engine is None
         if should_disconnect:
             inspector.connect()
         try:
@@ -1521,10 +1577,12 @@ class TaskScheduler:
                 engine.disconnect()
         mark_complete(file_key, file_size)
 
-    def _probe_remote_folder_bundle_support(self, site: SiteConfig) -> None:
-        engine = SftpEngine(site, self.logger)
+    def _probe_remote_folder_bundle_support(self, site: SiteConfig, engine: Optional[SftpEngine] = None) -> None:
+        engine = engine if self._can_reuse_bundle_engine(engine) else SftpEngine(site, self.logger)
+        should_disconnect = not self._can_reuse_bundle_engine(engine)
         try:
-            engine.connect()
+            if should_disconnect:
+                engine.connect()
             if not getattr(engine, "ssh_client", None):
                 raise SSHFerryError(ErrorCode.TRANSFER_FAILED, "Remote shell unavailable")
             exit_code, _std_out, std_err = self._exec_remote_shell(
@@ -1537,7 +1595,8 @@ class TaskScheduler:
                     std_err.strip() or "Remote tar command unavailable",
                 )
         finally:
-            engine.disconnect()
+            if should_disconnect:
+                engine.disconnect()
 
     @staticmethod
     def _inspect_upload_target_state(engine: SftpEngine, remote_path: str, file_size: int) -> tuple[bool, int]:
@@ -1574,6 +1633,7 @@ class TaskScheduler:
         remote_dir: str,
         files: list[dict[str, object]],
         *,
+        engine: Optional[SftpEngine] = None,
         bundle_id: str,
         add_progress,
     ) -> None:
@@ -1590,9 +1650,11 @@ class TaskScheduler:
                     check_interrupt()
             archive_size = max(1, os.path.getsize(local_archive))
             total_bytes = max(0, sum(int(item["size"]) for item in files))
-            engine = SftpEngine(site, self.logger)
+            engine = engine if self._can_reuse_bundle_engine(engine) else SftpEngine(site, self.logger)
+            should_disconnect = not self._can_reuse_bundle_engine(engine)
             try:
-                engine.connect()
+                if should_disconnect:
+                    engine.connect()
                 engine.upload_file(
                     local_archive,
                     remote_archive,
@@ -1615,7 +1677,8 @@ class TaskScheduler:
                     engine.remove_file(remote_archive)
                 except Exception:
                     pass
-                engine.disconnect()
+                if should_disconnect:
+                    engine.disconnect()
         finally:
             if local_archive and os.path.exists(local_archive):
                 os.remove(local_archive)
@@ -1628,6 +1691,7 @@ class TaskScheduler:
         local_dir: str,
         files: list[dict[str, object]],
         *,
+        engine: Optional[SftpEngine] = None,
         bundle_id: str,
         add_progress,
     ) -> None:
@@ -1643,9 +1707,11 @@ class TaskScheduler:
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as temp_file:
                 local_archive = temp_file.name
-            engine = SftpEngine(site, self.logger)
+            engine = engine if self._can_reuse_bundle_engine(engine) else SftpEngine(site, self.logger)
+            should_disconnect = not self._can_reuse_bundle_engine(engine)
             try:
-                engine.connect()
+                if should_disconnect:
+                    engine.connect()
                 exit_code, _std_out, std_err = self._exec_remote_shell(engine, create_cmd)
                 if exit_code != 0:
                     raise SSHFerryError(ErrorCode.TRANSFER_FAILED, std_err.strip() or "Remote bundle creation failed")
@@ -1662,12 +1728,21 @@ class TaskScheduler:
                     engine.remove_file(remote_archive)
                 except Exception:
                     pass
-                engine.disconnect()
+                if should_disconnect:
+                    engine.disconnect()
             with tarfile.open(local_archive, "r") as archive:
                 archive.extractall(local_dir)
         finally:
             if local_archive and os.path.exists(local_archive):
                 os.remove(local_archive)
+
+    @staticmethod
+    def _can_reuse_bundle_engine(engine: Optional[SftpEngine]) -> bool:
+        return bool(
+            engine
+            and getattr(engine, "ssh_client", None) is not None
+            and getattr(engine, "sftp_client", None) is not None
+        )
 
     @staticmethod
     def _exec_remote_shell(engine: SftpEngine, command: str) -> tuple[int, str, str]:
