@@ -19,7 +19,7 @@ SSHFerry is built for practical SSH file work: upload, download, remote-to-remot
 ## At A Glance
 
 - 🖥️ Desktop client: Python + PySide6, the current primary product
-- 🧩 Backend service: FastAPI local API layer
+- 🧩 Backend service: local FastAPI API layer
 - 🌐 Frontend app: React + Vite UI under active integration
 - 🔒 Safety first: `remote_root` limits remote operations to allowed paths
 - 📊 Task visibility: pause, resume, cancel, restart, skip-aware progress
@@ -39,7 +39,7 @@ SSHFerry is built for practical SSH file work: upload, download, remote-to-remot
 src/        Desktop app, transfer engines, scheduler, services, shared models
 backend/    FastAPI backend service
 frontend/   React + Vite frontend
-docs/       Project docs and architecture notes
+docs/       Maintained implementation docs
 tests/      Pytest suite
 tools/      Build and benchmark scripts
 ```
@@ -228,8 +228,8 @@ Site store path:
 
 ## Documentation
 
-- 📘 [docs/README.md](docs/README.md)
-- 🧱 [docs/frontend/FRONTEND_BUILD.md](docs/frontend/FRONTEND_BUILD.md)
-- 🔌 [docs/frontend/FRONTEND_API.md](docs/frontend/FRONTEND_API.md)
-- 🛠️ [docs/backend/BACKEND_TODO.md](docs/backend/BACKEND_TODO.md)
-- 🗂️ [docs/architecture/agent.md](docs/architecture/agent.md)
+- 📘 [Docs Index](docs/README.md)
+- 🧱 [Frontend Build Guide](docs/frontend/FRONTEND_BUILD.md)
+- 🔌 [Frontend API Guide](docs/frontend/FRONTEND_API.md)
+- 🎨 [Frontend Design Guide](docs/frontend/FRONTEND_DESIGN.md)
+- 🛠️ [Backend Overview](docs/backend/BACKEND_OVERVIEW.md)

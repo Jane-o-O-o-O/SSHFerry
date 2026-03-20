@@ -1,8 +1,8 @@
 """Metrics service for tracking transfer statistics and adaptive preset selection.
 
-This module implements session-level adaptive strategy per agent.md Milestone 5:
+This module:
 - Records transfer statistics (speed, duration, success rate) per preset
-- Provides recommendations for optimal preset based on historical data
+- Provides recommendations for an optimal preset based on historical data
 - Persists metrics to JSON for cross-session learning
 """
 import json
@@ -90,7 +90,7 @@ class MetricsCollector:
     """
     Collects transfer metrics and provides adaptive preset recommendations.
     
-    Adaptive Strategy (per agent.md):
+    Adaptive Strategy:
     - Tracks recent N transfers per preset
     - Recommends downgrade if failure rate > 20%
     - Recommends upgrade if success rate > 95% and speed stable

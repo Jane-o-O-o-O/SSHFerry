@@ -19,7 +19,7 @@ SSHFerry 面向真实的 SSH 文件处理场景，重点解决上传、下载、
 ## 快速了解
 
 - 🖥️ 桌面客户端：基于 Python + PySide6，是当前主要产品形态
-- 🧩 后端服务：基于 FastAPI 的本地 API 层
+- 🧩 后端服务：本地 FastAPI API 层
 - 🌐 前端应用：基于 React + Vite，仍在持续集成中
 - 🔒 安全边界：使用 `remote_root` 限制远程操作路径
 - 📊 任务可视化：支持暂停、继续、取消、重试和跳过感知进度
@@ -39,7 +39,7 @@ SSHFerry 面向真实的 SSH 文件处理场景，重点解决上传、下载、
 src/        桌面应用、传输引擎、调度器、服务层、共享模型
 backend/    FastAPI 后端服务
 frontend/   React + Vite 前端
-docs/       项目文档与架构说明
+docs/       维护中的实现文档
 tests/      Pytest 测试
 tools/      构建与基准脚本
 ```
@@ -228,8 +228,8 @@ python tools/benchmark_transfer.py --site "<your-site-name>" --size-mb 512 --ite
 
 ## 文档
 
-- 📘 [docs/README.md](docs/README.md)
-- 🧱 [docs/frontend/FRONTEND_BUILD.md](docs/frontend/FRONTEND_BUILD.md)
-- 🔌 [docs/frontend/FRONTEND_API.md](docs/frontend/FRONTEND_API.md)
-- 🛠️ [docs/backend/BACKEND_TODO.md](docs/backend/BACKEND_TODO.md)
-- 🗂️ [docs/architecture/agent.md](docs/architecture/agent.md)
+- 📘 [文档索引](docs/README_zh.md)
+- 🧱 [前端构建指南](docs/frontend/FRONTEND_BUILD_zh.md)
+- 🔌 [前端接口指南](docs/frontend/FRONTEND_API_zh.md)
+- 🎨 [前端设计指南](docs/frontend/FRONTEND_DESIGN_zh.md)
+- 🛠️ [后端总览](docs/backend/BACKEND_OVERVIEW_zh.md)
