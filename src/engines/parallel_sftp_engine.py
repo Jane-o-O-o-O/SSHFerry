@@ -96,6 +96,12 @@ class ParallelSftpEngine:
             self.max_chunk_retries,
             0,
         )
+        # Keep transport block sizing independent from progress update cadence.
+        self.io_block_bytes = _env_int(
+            "SSHFERRY_PARALLEL_IO_BLOCK_BYTES",
+            min(self.chunk_size, 4 * 1024 * 1024),
+            64 * 1024,
+        )
         self.progress_report_bytes = _env_int(
             "SSHFERRY_PARALLEL_PROGRESS_REPORT_BYTES",
             1024 * 1024,
@@ -272,7 +278,7 @@ class ParallelSftpEngine:
                                 remaining = length
                                 local_written = 0
                                 while remaining > 0:
-                                    block = min(self.progress_report_bytes, remaining)
+                                    block = min(self.io_block_bytes, remaining)
                                     data = f.read(block)
                                     if len(data) != block:
                                         raise IOError(
@@ -438,7 +444,7 @@ class ParallelSftpEngine:
                                 remaining = length
                                 local_read = 0
                                 while remaining > 0:
-                                    block = min(self.progress_report_bytes, remaining)
+                                    block = min(self.io_block_bytes, remaining)
                                     data = rf.read(block)
                                     if len(data) != block:
                                         raise IOError(

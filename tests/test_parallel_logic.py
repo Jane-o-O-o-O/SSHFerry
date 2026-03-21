@@ -29,6 +29,8 @@ class MockFileHandle:
         return data[self.pos:self.pos+size]
 
     def write(self, data):
+        with store_lock:
+            mock_write_sizes.setdefault(self.path, []).append(len(data))
         existing = bytearray(self.store.get(self.path, b''))
         end_pos = self.pos + len(data)
         if len(existing) < end_pos:
@@ -57,11 +59,13 @@ class MockSftpClient:
 
 # Global store for mock tests
 mock_data_store = {}
+mock_write_sizes = {}
 store_lock = threading.Lock()
 
 @pytest.fixture
 def mock_sftp_engine(monkeypatch):
     mock_data_store.clear()
+    mock_write_sizes.clear()
     
     class MockSftpEngine:
         def __init__(self, *args, **kwargs):
@@ -216,3 +220,35 @@ def test_parallel_download_worker_does_not_log_paused_interrupt(tmp_path, monkey
         engine.download_file(remote_path, str(tmp_path / "dl.bin"), check_interrupt=lambda: (_ for _ in ()).throw(InterruptedError("Task paused")))
 
     logger.error.assert_not_called()
+
+
+def test_parallel_upload_uses_io_block_bytes_separately_from_progress_reporting(tmp_path, mock_sftp_engine):
+    local_path = tmp_path / "large_file.bin"
+    file_size = 8 * 1024 * 1024
+    expected_data = os.urandom(file_size)
+    local_path.write_bytes(expected_data)
+
+    config = SiteConfig(
+        name="test",
+        host="mock",
+        port=22,
+        username="user",
+        auth_method="password",
+        remote_root="/"
+    )
+    engine = ParallelSftpEngine(config, max_workers=1, chunk_size=file_size)
+    engine.io_block_bytes = 4 * 1024 * 1024
+    engine.progress_report_bytes = 1024 * 1024
+
+    remote_path = "/remote/uploaded-io-block.bin"
+    progress_updates: list[int] = []
+
+    engine.upload_file(
+        str(local_path),
+        remote_path,
+        callback=lambda done, _total: progress_updates.append(done),
+    )
+
+    assert mock_sftp_engine[remote_path] == expected_data
+    assert mock_write_sizes[remote_path] == [4 * 1024 * 1024, 4 * 1024 * 1024]
+    assert progress_updates == [4 * 1024 * 1024, 8 * 1024 * 1024]

@@ -160,6 +160,10 @@ export interface LocalListResponse {
   total: number;
 }
 
+export interface LocalStatResponse {
+  entry: LocalEntry;
+}
+
 export interface WorkspaceEntry {
   name: string;
   path: string;

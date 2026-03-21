@@ -2,7 +2,13 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { closeSession } from '../../api/sessions';
 import type { TransferDragPayload } from '../../api/types';
-import { createRemoteCopyTask, createWorkspaceDownloadTask, createWorkspaceUploadTask } from '../../api/tasks';
+import {
+  createDownloadTask,
+  createRemoteCopyTask,
+  createUploadTask,
+  createWorkspaceDownloadTask,
+  createWorkspaceUploadTask,
+} from '../../api/tasks';
 import { ActivityFeed } from '../../components/activity/ActivityFeed';
 import { AppTopBar } from '../../components/layout/AppTopBar';
 import { RemoteWorkspace } from '../../components/remote-workspace/RemoteWorkspace';
@@ -24,6 +30,7 @@ function summarizeResults(results: PromiseSettledResult<unknown>[]) {
 export function WorkspacePage() {
   const queryClient = useQueryClient();
   const authenticated = useAuthStore((state) => state.status === 'authenticated');
+  const health = useAuthStore((state) => state.health);
   const panes = useWorkspaceStore((state) => state.panes);
   const centerPanelMode = useWorkspaceStore((state) => state.centerPanelMode);
   const centerSessionId = useWorkspaceStore((state) => state.centerSessionId);
@@ -32,9 +39,12 @@ export function WorkspacePage() {
   const protocolOverride = useUiStore((state) => state.protocolOverride);
   const pushToast = useUiStore((state) => state.pushToast);
   const { t } = useI18n();
+  const useDirectLocalMode = health?.runtime_mode === 'local-dev';
 
   const uploadMutation = useMutation({ mutationFn: createWorkspaceUploadTask });
+  const localUploadMutation = useMutation({ mutationFn: createUploadTask });
   const downloadMutation = useMutation({ mutationFn: createWorkspaceDownloadTask });
+  const localDownloadMutation = useMutation({ mutationFn: createDownloadTask });
   const remoteCopyMutation = useMutation({ mutationFn: createRemoteCopyTask });
   const closeSessionMutation = useMutation({ mutationFn: closeSession });
 
@@ -57,12 +67,19 @@ export function WorkspacePage() {
     }
     const results = await Promise.allSettled(
       localPaths.map((localPath) =>
-        uploadMutation.mutateAsync({
-          session_id: sessionId,
-          workspace_path: localPath,
-          remote_path: joinRemotePath(targetDir, basename(localPath)),
-          engine: protocolOverride,
-        }),
+        useDirectLocalMode
+          ? localUploadMutation.mutateAsync({
+              session_id: sessionId,
+              local_path: localPath,
+              remote_path: joinRemotePath(targetDir, basename(localPath)),
+              engine: protocolOverride,
+            })
+          : uploadMutation.mutateAsync({
+              session_id: sessionId,
+              workspace_path: localPath,
+              remote_path: joinRemotePath(targetDir, basename(localPath)),
+              engine: protocolOverride,
+            }),
       ),
     );
     const summary = summarizeResults(results);
@@ -83,12 +100,19 @@ export function WorkspacePage() {
     }
     const results = await Promise.allSettled(
       remotePaths.map((remotePath) =>
-        downloadMutation.mutateAsync({
-          session_id: sessionId,
-          remote_path: remotePath,
-          workspace_path: joinLocalPath(targetDir, basename(remotePath)),
-          engine: protocolOverride,
-        }),
+        useDirectLocalMode
+          ? localDownloadMutation.mutateAsync({
+              session_id: sessionId,
+              remote_path: remotePath,
+              local_path: joinLocalPath(targetDir, basename(remotePath)),
+              engine: protocolOverride,
+            })
+          : downloadMutation.mutateAsync({
+              session_id: sessionId,
+              remote_path: remotePath,
+              workspace_path: joinLocalPath(targetDir, basename(remotePath)),
+              engine: protocolOverride,
+            }),
       ),
     );
     const summary = summarizeResults(results);

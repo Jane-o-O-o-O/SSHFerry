@@ -1,5 +1,6 @@
 ﻿import type { TransferDragPayload } from '../../api/types';
 import { useI18n } from '../../i18n';
+import { useAuthStore } from '../../store/auth';
 import type { CenterPanelMode, RemotePaneState } from '../../store/workspace';
 import { LocalPanel } from '../file-browser/LocalPanel';
 import { RemotePane } from '../remote-workspace/RemotePane';
@@ -33,6 +34,8 @@ export function MiddleWorkspace({
   onQueueRemoteCopies,
 }: MiddleWorkspaceProps) {
   const { t } = useI18n();
+  const health = useAuthStore((state) => state.health);
+  const localLabel = health?.runtime_mode === 'local-dev' ? t('endpoint.local') : t('endpoint.workspace');
   const canUseRemote = panes.length > 0;
   const effectiveMode = mode === 'remote' && canUseRemote ? 'remote' : 'local';
   const centerPane = panes.find((pane) => pane.sessionId === centerSessionId) ?? panes[0] ?? null;
@@ -51,7 +54,7 @@ export function MiddleWorkspace({
               className={`middle-panel-button ${effectiveMode === 'local' ? 'is-active' : ''}`}
               onClick={() => onChangeMode('local')}
             >
-              {t('endpoint.workspace')}
+              {localLabel}
             </button>
             <button
               type="button"

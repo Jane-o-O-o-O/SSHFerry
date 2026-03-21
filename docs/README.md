@@ -11,6 +11,8 @@ This directory contains the maintained project documentation set. Files that wer
 - 🎨 [Frontend Design Guide](frontend/FRONTEND_DESIGN.md)
 - 🛠️ [Backend Overview](backend/BACKEND_OVERVIEW.md)
 
+- [传输规则对齐说明（中文）](backend/TRANSFER_RULES_zh.md)
+
 ## Recommended Reading Order
 
 ### For general contributors
