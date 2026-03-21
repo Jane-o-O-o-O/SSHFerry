@@ -20,15 +20,14 @@ function getLogFeatureError(error: unknown): string | null {
 }
 
 export function useLogSocket() {
-  const token = useAuthStore((state) => state.token);
-  const authReady = useAuthStore((state) => state.status === 'ready');
+  const authReady = useAuthStore((state) => state.status === 'authenticated');
   const setSnapshot = useLogsStore((state) => state.setSnapshot);
   const setSocketStatus = useLogsStore((state) => state.setSocketStatus);
   const setSocketError = useLogsStore((state) => state.setSocketError);
   const pushToast = useUiStore((state) => state.pushToast);
 
   useEffect(() => {
-    if (!authReady || !token) {
+    if (!authReady) {
       return undefined;
     }
 
@@ -94,7 +93,7 @@ export function useLogSocket() {
       }
 
       setSocketStatus(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
-      socket = new WebSocket(getLogSocketUrl(token));
+      socket = new WebSocket(getLogSocketUrl());
 
       socket.onopen = () => {
         reconnectAttempts = 0;
@@ -174,5 +173,5 @@ export function useLogSocket() {
       }
       setSocketStatus('idle');
     };
-  }, [authReady, pushToast, setSnapshot, setSocketError, setSocketStatus, token]);
+  }, [authReady, pushToast, setSnapshot, setSocketError, setSocketStatus]);
 }

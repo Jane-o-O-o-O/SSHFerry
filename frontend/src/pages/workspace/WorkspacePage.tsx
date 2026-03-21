@@ -1,11 +1,10 @@
-﻿import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Navigate } from 'react-router-dom';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { closeSession } from '../../api/sessions';
 import type { TransferDragPayload } from '../../api/types';
-import { createDownloadTask, createRemoteCopyTask, createUploadTask } from '../../api/tasks';
+import { createRemoteCopyTask, createWorkspaceDownloadTask, createWorkspaceUploadTask } from '../../api/tasks';
+import { ActivityFeed } from '../../components/activity/ActivityFeed';
 import { AppTopBar } from '../../components/layout/AppTopBar';
-import { LogPlaceholder } from '../../components/logs/LogPlaceholder';
 import { RemoteWorkspace } from '../../components/remote-workspace/RemoteWorkspace';
 import { SiteEditorModal } from '../../components/sites/SiteEditorModal';
 import { SiteSidebar } from '../../components/sites/SiteSidebar';
@@ -24,7 +23,7 @@ function summarizeResults(results: PromiseSettledResult<unknown>[]) {
 
 export function WorkspacePage() {
   const queryClient = useQueryClient();
-  const status = useAuthStore((state) => state.status);
+  const authenticated = useAuthStore((state) => state.status === 'authenticated');
   const panes = useWorkspaceStore((state) => state.panes);
   const centerPanelMode = useWorkspaceStore((state) => state.centerPanelMode);
   const centerSessionId = useWorkspaceStore((state) => state.centerSessionId);
@@ -34,16 +33,12 @@ export function WorkspacePage() {
   const pushToast = useUiStore((state) => state.pushToast);
   const { t } = useI18n();
 
-  const uploadMutation = useMutation({ mutationFn: createUploadTask });
-  const downloadMutation = useMutation({ mutationFn: createDownloadTask });
+  const uploadMutation = useMutation({ mutationFn: createWorkspaceUploadTask });
+  const downloadMutation = useMutation({ mutationFn: createWorkspaceDownloadTask });
   const remoteCopyMutation = useMutation({ mutationFn: createRemoteCopyTask });
   const closeSessionMutation = useMutation({ mutationFn: closeSession });
 
-  if (status === 'error') {
-    return <Navigate to="/" replace />;
-  }
-
-  if (status !== 'ready') {
+  if (!authenticated) {
     return (
       <main className="bootstrap-page">
         <section className="bootstrap-panel">
@@ -64,7 +59,7 @@ export function WorkspacePage() {
       localPaths.map((localPath) =>
         uploadMutation.mutateAsync({
           session_id: sessionId,
-          local_path: localPath,
+          workspace_path: localPath,
           remote_path: joinRemotePath(targetDir, basename(localPath)),
           engine: protocolOverride,
         }),
@@ -91,7 +86,7 @@ export function WorkspacePage() {
         downloadMutation.mutateAsync({
           session_id: sessionId,
           remote_path: remotePath,
-          local_path: joinLocalPath(targetDir, basename(remotePath)),
+          workspace_path: joinLocalPath(targetDir, basename(remotePath)),
           engine: protocolOverride,
         }),
       ),
@@ -166,7 +161,6 @@ export function WorkspacePage() {
           mode={centerPanelMode}
           centerSessionId={centerSessionId}
           onChangeMode={setCenterPanelMode}
-          onChangeSessionId={setCenterSessionId}
           onQueueLocalDownloads={handleLocalDrop}
           onCloseSession={(sessionId) => {
             void handleCloseSession(sessionId);
@@ -189,7 +183,7 @@ export function WorkspacePage() {
       </section>
       <section className="workspace-bottom-grid">
         <TaskCenter />
-        <LogPlaceholder />
+        <ActivityFeed />
       </section>
       <SiteEditorModal />
     </main>

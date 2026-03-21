@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { getErrorMessage } from '../../api/http';
@@ -53,9 +53,20 @@ export function SiteSidebar() {
 
   const selectedSite = sitesQuery.data?.items.find((site) => site.name === selectedSiteName) ?? null;
   const activeSessionId = activePaneId || sessionsQuery.data?.items[0]?.session_id || null;
+  const selectedSiteEndpoint = selectedSite ? `${selectedSite.username}@${selectedSite.host}:${selectedSite.port}` : '';
+  const selectedSiteAuthSummary = selectedSite ? getAuthSummary(selectedSite) : '';
+  const connectionResultTone: 'success' | 'warning' = connectionResult.every((item) => item.passed) ? 'success' : 'warning';
 
   function needsRuntimeSecret(site: SiteResponse) {
     return site.auth_method === 'password' && !site.has_password;
+  }
+
+  function getAuthSummary(site: SiteResponse) {
+    return site.auth_method === 'password'
+      ? site.has_password
+        ? t('siteSidebar.authSummarySavedPassword')
+        : t('siteSidebar.authSummaryRuntimePassword')
+      : t('siteSidebar.authSummaryKey');
   }
 
   async function handleCheck(site: SiteResponse, payload?: { password?: string; keyPassphrase?: string }) {
@@ -248,35 +259,38 @@ export function SiteSidebar() {
           <StatusBadge tone="neutral">{sitesQuery.data?.total?.toString() || '0'}</StatusBadge>
         </div>
         <div className="sidebar-list">
-          {sitesQuery.data?.items.map((site) => (
-            <button
-              type="button"
-              key={site.name}
-              className={`sidebar-row ${selectedSiteName === site.name ? 'is-active' : ''}`}
-              onClick={() => setSelectedSiteName(site.name)}
-            >
-              <span>{site.name}</span>
-              <span className="sidebar-meta mono-cell">{site.username}@{site.host}:{site.port}</span>
-            </button>
-          ))}
+          {sitesQuery.data?.items.map((site) => {
+            const endpoint = `${site.username}@${site.host}:${site.port}`;
+            return (
+              <button
+                type="button"
+                key={site.name}
+                className={`sidebar-row ${selectedSiteName === site.name ? 'is-active' : ''}`}
+                onClick={() => setSelectedSiteName(site.name)}
+              >
+                <span className="sidebar-row-copy">
+                  <span className="sidebar-row-title" title={site.name}>{site.name}</span>
+                  <span className="sidebar-meta mono-cell sidebar-truncate" title={endpoint}>{endpoint}</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
       </section>
 
       {selectedSite ? (
         <section className="sidebar-section site-summary">
-          <div className="sidebar-title-row">
-            <strong>{t('siteSidebar.selectedSite')}</strong>
-            <StatusBadge tone="info">{formatProtocol(selectedSite.default_transfer_protocol)}</StatusBadge>
-          </div>
-          <p>{selectedSite.username}@{selectedSite.host}:{selectedSite.port}</p>
-          <p className="mono-cell">{selectedSite.remote_root}</p>
-          <p className="sidebar-help">
-            {selectedSite.auth_method === 'password'
-              ? selectedSite.has_password
-                ? t('siteSidebar.authSummarySavedPassword')
-                : t('siteSidebar.authSummaryRuntimePassword')
-              : t('siteSidebar.authSummaryKey')}
-          </p>
+          <details className="sidebar-details">
+            <summary className="sidebar-title-row sidebar-details-summary">
+              <strong>{t('siteSidebar.selectedSite')}</strong>
+              <StatusBadge tone="info">{formatProtocol(selectedSite.default_transfer_protocol)}</StatusBadge>
+            </summary>
+            <div className="sidebar-details-body">
+              <p className="sidebar-truncate" title={selectedSiteEndpoint}>{selectedSiteEndpoint}</p>
+              <p className="mono-cell sidebar-truncate" title={selectedSite.remote_root}>{selectedSite.remote_root}</p>
+              <p className="sidebar-help sidebar-truncate" title={selectedSiteAuthSummary}>{selectedSiteAuthSummary}</p>
+            </div>
+          </details>
         </section>
       ) : null}
 
@@ -286,34 +300,47 @@ export function SiteSidebar() {
           <StatusBadge tone="neutral">{sessionsQuery.data?.total?.toString() || '0'}</StatusBadge>
         </div>
         <div className="sidebar-list">
-          {sessionsQuery.data?.items.map((session) => (
-            <div key={session.session_id} className={`sidebar-row compact-session ${activePaneId === session.session_id ? 'is-active' : ''}`}>
-              <button type="button" className="sidebar-row-main" onClick={() => setActivePane(session.session_id)}>
-                <span>{session.site_name}</span>
-                <span className="sidebar-meta mono-cell">{shortId(session.session_id)} · {session.remote_root}</span>
-              </button>
-              <button type="button" className="row-action" onClick={() => requestCloseSession(session.session_id)}>
-                {t('common.close')}
-              </button>
-            </div>
-          ))}
+          {sessionsQuery.data?.items.map((session) => {
+            const sessionMeta = `${shortId(session.session_id)} / ${session.remote_root}`;
+            return (
+              <div key={session.session_id} className={`sidebar-row compact-session ${activePaneId === session.session_id ? 'is-active' : ''}`}>
+                <button type="button" className="sidebar-row-main" onClick={() => setActivePane(session.session_id)}>
+                  <span className="sidebar-row-copy">
+                    <span className="sidebar-row-title" title={session.site_name}>{session.site_name}</span>
+                    <span className="sidebar-meta mono-cell sidebar-truncate" title={sessionMeta}>{sessionMeta}</span>
+                  </span>
+                </button>
+                <button type="button" className="row-action" onClick={() => requestCloseSession(session.session_id)}>
+                  {t('common.close')}
+                </button>
+              </div>
+            );
+          })}
         </div>
       </section>
 
       {connectionResult.length ? (
         <section className="sidebar-section result-card">
-          <div className="sidebar-title-row">
-            <strong>{t('siteSidebar.connectionResult')}</strong>
-          </div>
-          {connectionResult.map((item) => (
-            <p key={`${item.name}-${item.message}`}>
-              {t('siteSidebar.connectionLine', {
-                status: item.passed ? t('common.ok') : t('common.fail'),
-                name: item.name,
-                message: item.message,
+          <details className="sidebar-details">
+            <summary className="sidebar-title-row sidebar-details-summary">
+              <strong>{t('siteSidebar.connectionResult')}</strong>
+              <StatusBadge tone={connectionResultTone}>{connectionResult.length.toString()}</StatusBadge>
+            </summary>
+            <div className="sidebar-details-body">
+              {connectionResult.map((item) => {
+                const line = t('siteSidebar.connectionLine', {
+                  status: item.passed ? t('common.ok') : t('common.fail'),
+                  name: item.name,
+                  message: item.message,
+                });
+                return (
+                  <p key={`${item.name}-${item.message}`} className="sidebar-truncate" title={line}>
+                    {line}
+                  </p>
+                );
               })}
-            </p>
-          ))}
+            </div>
+          </details>
         </section>
       ) : null}
 

@@ -1,4 +1,4 @@
-﻿"""Connection checking and remote session orchestration."""
+"""Connection checking and remote session orchestration."""
 from __future__ import annotations
 
 from contextlib import nullcontext
@@ -21,9 +21,10 @@ from src.shared.models import SiteConfig
 class ConnectionService:
     """Operations for site-based connection checks and remote sessions."""
 
-    def __init__(self, site_store: SiteStore, remote_sessions: dict[str, SiteConfig], session_lock=None):
+    def __init__(self, site_store: SiteStore, remote_sessions: dict[str, SiteConfig], owner_user_id: str, session_lock=None):
         self.site_store = site_store
         self.remote_sessions = remote_sessions
+        self.owner_user_id = owner_user_id
         self.session_lock = session_lock
 
     def run_check(self, payload: ConnectionCheckRequest) -> ConnectionCheckResponse:
@@ -57,7 +58,11 @@ class ConnectionService:
 
     def list_sessions(self) -> list[SessionResponse]:
         with self._session_guard():
-            items = list(self.remote_sessions.items())
+            items = [
+                (session_id, site)
+                for session_id, site in self.remote_sessions.items()
+                if site.owner_user_id in (None, self.owner_user_id)
+            ]
         return [self._to_session_response(session_id, site) for session_id, site in items]
 
     def open_session(self, payload: SessionOpenRequest) -> SessionResponse:
@@ -66,6 +71,7 @@ class ConnectionService:
             password=payload.password,
             key_passphrase=payload.key_passphrase,
         )
+        runtime_site.owner_user_id = self.owner_user_id
         session_id = str(uuid.uuid4())
         with self._session_guard():
             self.remote_sessions[session_id] = runtime_site
@@ -73,7 +79,8 @@ class ConnectionService:
 
     def close_session(self, session_id: str) -> None:
         with self._session_guard():
-            if session_id not in self.remote_sessions:
+            site = self.remote_sessions.get(session_id)
+            if site is None or site.owner_user_id not in (None, self.owner_user_id):
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Session '{session_id}' not found",
@@ -90,6 +97,7 @@ class ConnectionService:
         site = self._load_site(site_name)
         runtime_site = replace(site)
         runtime_site.remote_root = runtime_site.remote_root.strip() or '/'
+        runtime_site.owner_user_id = self.owner_user_id
 
         if runtime_site.auth_method == 'password':
             runtime_site.password = password if password is not None else runtime_site.password
@@ -111,9 +119,12 @@ class ConnectionService:
         return runtime_site
 
     def _load_site(self, site_name: str) -> SiteConfig:
-        sites = self.site_store.load()
+        try:
+            sites = self.site_store.load_or_raise()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
         for site in sites:
-            if site.name == site_name:
+            if site.name == site_name and site.owner_user_id in (None, self.owner_user_id):
                 return site
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

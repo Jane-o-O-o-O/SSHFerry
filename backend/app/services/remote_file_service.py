@@ -1,4 +1,4 @@
-﻿"""Remote file browsing and mutation service for backend APIs."""
+"""Remote file browsing and mutation service for backend APIs."""
 from __future__ import annotations
 
 from contextlib import nullcontext
@@ -14,8 +14,9 @@ from src.shared.paths import get_remote_parent
 class RemoteFileService:
     """SFTP-backed remote file operations scoped to an active session."""
 
-    def __init__(self, remote_sessions: dict[str, SiteConfig], session_lock=None):
+    def __init__(self, remote_sessions: dict[str, SiteConfig], owner_user_id: str, session_lock=None):
         self.remote_sessions = remote_sessions
+        self.owner_user_id = owner_user_id
         self.session_lock = session_lock
 
     def list_dir(self, session_id: str, path: str | None = None) -> tuple[str, str | None, list[RemoteEntryResponse]]:
@@ -82,7 +83,7 @@ class RemoteFileService:
     def _require_session(self, session_id: str) -> SiteConfig:
         with self._session_guard():
             site = self.remote_sessions.get(session_id)
-            if site is None:
+            if site is None or site.owner_user_id not in (None, self.owner_user_id):
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Session '{session_id}' not found",

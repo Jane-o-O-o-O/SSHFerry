@@ -9,7 +9,6 @@ interface MiddleWorkspaceProps {
   mode: CenterPanelMode;
   centerSessionId: string | null;
   onChangeMode: (mode: CenterPanelMode) => void;
-  onChangeSessionId: (sessionId: string | null) => void;
   onQueueLocalDownloads: (payload: TransferDragPayload, targetDir: string) => void | Promise<void>;
   onCloseSession: (sessionId: string) => void;
   onQueueUploads: (localPaths: string[], sessionId: string, targetDir: string) => void | Promise<void>;
@@ -27,7 +26,6 @@ export function MiddleWorkspace({
   mode,
   centerSessionId,
   onChangeMode,
-  onChangeSessionId,
   onQueueLocalDownloads,
   onCloseSession,
   onQueueUploads,
@@ -53,7 +51,7 @@ export function MiddleWorkspace({
               className={`middle-panel-button ${effectiveMode === 'local' ? 'is-active' : ''}`}
               onClick={() => onChangeMode('local')}
             >
-              {t('endpoint.local')}
+              {t('endpoint.workspace')}
             </button>
             <button
               type="button"
@@ -65,21 +63,6 @@ export function MiddleWorkspace({
             </button>
           </div>
         </div>
-        {effectiveMode === 'remote' ? (
-          <label className="form-field middle-panel-select">
-            <span>{t('workspace.middleSession')}</span>
-            <select
-              value={centerPane?.sessionId ?? ''}
-              onChange={(event) => onChangeSessionId(event.target.value || null)}
-            >
-              {panes.map((pane) => (
-                <option key={pane.sessionId} value={pane.sessionId}>
-                  {pane.siteName} · {pane.currentPath}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
       </div>
 
       {effectiveMode === 'local' ? (

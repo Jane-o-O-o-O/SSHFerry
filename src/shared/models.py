@@ -20,6 +20,7 @@ class SiteConfig:
     username: str
     auth_method: str  # "password" or "key"
     remote_root: str  # Sandbox root directory (e.g., /root/autodl-tmp)
+    owner_user_id: Optional[str] = None
 
     # Auth credentials
     password: Optional[str] = None
@@ -94,6 +95,7 @@ class Task:
     src: str
     dst: str
     bytes_total: int
+    owner_user_id: Optional[str] = None
     src_endpoint_type: EndpointType = "local"
     dst_endpoint_type: EndpointType = "remote"
     src_session_id: Optional[str] = None

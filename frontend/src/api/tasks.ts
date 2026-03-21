@@ -16,6 +16,16 @@ export async function createUploadTask(payload: {
   return data;
 }
 
+export async function createWorkspaceUploadTask(payload: {
+  session_id: string;
+  workspace_path: string;
+  remote_path: string;
+  engine: TaskEngine;
+}): Promise<TaskItem> {
+  const { data } = await http.post<TaskItem>('/api/tasks/upload-from-workspace', payload);
+  return data;
+}
+
 export async function createDownloadTask(payload: {
   session_id: string;
   remote_path: string;
@@ -23,6 +33,16 @@ export async function createDownloadTask(payload: {
   engine: TaskEngine;
 }): Promise<TaskItem> {
   const { data } = await http.post<TaskItem>('/api/tasks/download', payload);
+  return data;
+}
+
+export async function createWorkspaceDownloadTask(payload: {
+  session_id: string;
+  remote_path: string;
+  workspace_path: string;
+  engine: TaskEngine;
+}): Promise<TaskItem> {
+  const { data } = await http.post<TaskItem>('/api/tasks/download-to-workspace', payload);
   return data;
 }
 

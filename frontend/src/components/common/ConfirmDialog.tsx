@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 
 import { useI18n } from '../../i18n';
 import { useUiStore } from '../../store/ui';
@@ -28,7 +28,6 @@ export function ConfirmDialog() {
     <Modal
       open={confirm.open}
       title={confirm.title}
-      description={confirm.description}
       onClose={() => {
         if (!submitting) {
           closeConfirm();

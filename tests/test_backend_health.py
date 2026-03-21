@@ -1,4 +1,4 @@
-﻿"""Tests for the FastAPI backend skeleton."""
+"""Tests for the FastAPI backend health endpoint."""
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
@@ -14,7 +14,14 @@ def test_health_endpoint_reports_backend_status():
     assert payload['service'] == 'sshferry-backend'
     assert payload['session_count'] == 0
     assert payload['auth_required'] is True
-    assert payload['auth_header_name'] == 'X-SSHFerry-Token'
+    assert payload['runtime_mode'] in {'local-dev', 'deployed-web'}
+    assert payload['auth_mode'] in {'local-dev-cookie', 'cookie-session'}
+    assert payload['access_cookie_name']
+    assert payload['refresh_cookie_name']
+    assert payload['features']
+    assert 'workspace-reset' in payload['features']
+    if payload['runtime_mode'] == 'local-dev':
+        assert payload['auth_header_name'] == 'X-SSHFerry-Token'
     if payload['ready']:
         assert payload['status'] == 'ok'
         assert payload['scheduler_running'] is True

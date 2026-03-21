@@ -1,4 +1,4 @@
-﻿import { useEffect } from 'react';
+import { useEffect } from 'react';
 
 import { listTasks } from '../api/tasks';
 import { getTaskSocketUrl, parseTaskSocketMessage } from '../api/ws';
@@ -12,15 +12,14 @@ const RECONNECT_DELAY_MS = 2200;
 const MAX_RECONNECT_BEFORE_POLLING = 3;
 
 export function useTaskSocket() {
-  const token = useAuthStore((state) => state.token);
-  const authReady = useAuthStore((state) => state.status === 'ready');
-  const setSnapshot = useTasksStore((state) => state.setSnapshot);
+  const authReady = useAuthStore((state) => state.status === 'authenticated');
+  const setRemoteSnapshot = useTasksStore((state) => state.setRemoteSnapshot);
   const setSocketStatus = useTasksStore((state) => state.setSocketStatus);
   const setSocketError = useTasksStore((state) => state.setSocketError);
   const pushToast = useUiStore((state) => state.pushToast);
 
   useEffect(() => {
-    if (!authReady || !token) {
+    if (!authReady) {
       return undefined;
     }
 
@@ -33,7 +32,7 @@ export function useTaskSocket() {
     const pollTasks = async () => {
       try {
         const snapshot = await listTasks();
-        setSnapshot(snapshot.items, snapshot.total);
+        setRemoteSnapshot(snapshot.items, snapshot.total);
       } catch (error) {
         setSocketError(error instanceof Error ? error.message : translate('socket.pollFailed'));
       }
@@ -62,7 +61,7 @@ export function useTaskSocket() {
       }
 
       setSocketStatus(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
-      socket = new WebSocket(getTaskSocketUrl(token));
+      socket = new WebSocket(getTaskSocketUrl());
 
       socket.onopen = () => {
         reconnectAttempts = 0;
@@ -78,7 +77,7 @@ export function useTaskSocket() {
         }
 
         if (payload.type === 'task_snapshot') {
-          setSnapshot(payload.items, payload.total);
+          setRemoteSnapshot(payload.items, payload.total);
           return;
         }
 
@@ -119,5 +118,5 @@ export function useTaskSocket() {
       }
       setSocketStatus('idle');
     };
-  }, [authReady, pushToast, setSnapshot, setSocketError, setSocketStatus, token]);
+  }, [authReady, pushToast, setRemoteSnapshot, setSocketError, setSocketStatus]);
 }

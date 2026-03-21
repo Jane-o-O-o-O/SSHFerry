@@ -1,4 +1,4 @@
-﻿"""FastAPI backend entry point for the local SSHFerry service."""
+"""FastAPI backend entry point for SSHFerry."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -10,19 +10,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.routes import api_router
+from backend.app.config import DEFAULT_ALLOWED_ORIGINS
 from backend.app.services.app_state import AppState
 from src import __version__
-
-
-DEFAULT_ALLOWED_ORIGINS = (
-    'http://127.0.0.1:5173',
-    'http://localhost:5173',
-    'http://127.0.0.1:4173',
-    'http://localhost:4173',
-    'http://127.0.0.1:3000',
-    'http://localhost:3000',
-    'null',
-)
 
 
 @asynccontextmanager
@@ -37,17 +27,14 @@ async def lifespan_factory(app: FastAPI, app_state_factory: Callable[[], AppStat
         app_state.stop()
 
 
-def _allowed_origins() -> list[str]:
-    configured = os.getenv('SSHFERRY_ALLOWED_ORIGINS', '').strip()
-    if not configured:
-        return list(DEFAULT_ALLOWED_ORIGINS)
-    parsed = [item.strip() for item in configured.split(',') if item.strip()]
-    return parsed or list(DEFAULT_ALLOWED_ORIGINS)
-
-
 def create_app(app_state_factory: Callable[[], AppState] | None = None) -> FastAPI:
     """Create the FastAPI application."""
     factory = app_state_factory or AppState
+    preview_state = factory()
+    runtime_settings = getattr(preview_state, 'runtime_settings', None)
+    allow_origins = list(getattr(runtime_settings, 'allowed_origins', DEFAULT_ALLOWED_ORIGINS))
+    allow_credentials = bool(getattr(runtime_settings, 'allow_credentials', False))
+
     app = FastAPI(
         title='SSHFerry Backend',
         version=__version__,
@@ -55,8 +42,8 @@ def create_app(app_state_factory: Callable[[], AppState] | None = None) -> FastA
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_allowed_origins(),
-        allow_credentials=False,
+        allow_origins=allow_origins,
+        allow_credentials=allow_credentials,
         allow_methods=['*'],
         allow_headers=['*'],
     )
@@ -68,7 +55,7 @@ app = create_app()
 
 
 def run() -> None:
-    """Run the local backend service."""
+    """Run the backend service."""
     host = os.getenv('SSHFERRY_BACKEND_HOST', '127.0.0.1')
     port = int(os.getenv('SSHFERRY_BACKEND_PORT', '18080'))
     uvicorn.run('backend.app.main:app', host=host, port=port, reload=False)

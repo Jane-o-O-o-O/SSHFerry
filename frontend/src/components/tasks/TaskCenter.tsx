@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 
 import { cancelTask, clearFinishedTasks, pauseTask, restartTask, resumeTask } from '../../api/tasks';
@@ -69,9 +69,22 @@ function countByStatus(items: TaskItem[]) {
   return summary;
 }
 
+function isClientWorkspaceUploadTask(task: TaskItem) {
+  return task.src_endpoint_type === 'local' && task.dst_endpoint_type === 'workspace';
+}
+
+function clampProgress(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
 export function TaskCenter({ fullPage = false }: TaskCenterProps) {
   const items = useTasksStore((state) => state.items);
   const socketStatus = useTasksStore((state) => state.socketStatus);
+  const cancelClientTask = useTasksStore((state) => state.cancelClientTask);
+  const clearClientFinished = useTasksStore((state) => state.clearClientFinished);
   const pushToast = useUiStore((state) => state.pushToast);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const { formatDirection, formatSocketStatus, formatTaskProgress, formatTaskStatus, formatTransferSpeed, t } = useI18n();
@@ -99,7 +112,9 @@ export function TaskCenter({ fullPage = false }: TaskCenterProps) {
       return;
     }
 
-    const mutation =
+    const clientTasks = selected.filter(isClientWorkspaceUploadTask);
+    const backendTasks = selected.filter((task) => !isClientWorkspaceUploadTask(task));
+    const backendMutation =
       action === 'pause'
         ? pauseMutation
         : action === 'resume'
@@ -108,12 +123,24 @@ export function TaskCenter({ fullPage = false }: TaskCenterProps) {
             ? cancelMutation
             : restartMutation;
 
-    const results = await Promise.allSettled(selected.map((task) => mutation.mutateAsync(task.task_id)));
-    const successCount = results.filter((result) => result.status === 'fulfilled').length;
+    const localSuccessCount = action === 'cancel'
+      ? clientTasks.filter((task) => cancelClientTask(task.task_id)).length
+      : 0;
+    const backendResults = backendTasks.length
+      ? await Promise.allSettled(backendTasks.map((task) => backendMutation.mutateAsync(task.task_id)))
+      : [];
+    const backendSuccessCount = backendResults.filter((result) => result.status === 'fulfilled').length;
+    const total = backendTasks.length + (action === 'cancel' ? clientTasks.length : 0);
+    const successCount = backendSuccessCount + localSuccessCount;
+
+    if (!total) {
+      return;
+    }
+
     pushToast({
-      tone: successCount === results.length ? 'success' : 'warning',
+      tone: successCount === total ? 'success' : 'warning',
       title: t('taskCenter.toast.actionSubmitted', { action: t(`task.action.${action}`) }),
-      message: t('taskCenter.toast.actionAccepted', { successCount, total: results.length }),
+      message: t('taskCenter.toast.actionAccepted', { successCount, total }),
     });
   }
 
@@ -165,6 +192,7 @@ export function TaskCenter({ fullPage = false }: TaskCenterProps) {
             className="ghost-button"
             onClick={() => {
               void clearFinishedMutation.mutateAsync().then(() => {
+                clearClientFinished();
                 pushToast({ tone: 'success', title: t('taskCenter.toast.clearedFinished') });
               });
             }}
@@ -196,56 +224,77 @@ export function TaskCenter({ fullPage = false }: TaskCenterProps) {
                 </td>
               </tr>
             ) : null}
-            {sortedItems.map((task) => (
-              <tr key={task.task_id} className={`task-row status-${task.status}`}>
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={checkedIds.includes(task.task_id)}
-                    onChange={(event) => {
-                      setCheckedIds((current) =>
-                        event.target.checked
-                          ? [...current, task.task_id]
-                          : current.filter((taskId) => taskId !== task.task_id),
-                      );
-                    }}
-                  />
-                </td>
-                <td className="mono-cell">{task.task_id.slice(0, 8)}</td>
-                <td>{formatDirection(task.src_endpoint_type, task.dst_endpoint_type)}</td>
-                <td>{task.engine.toUpperCase()}</td>
-                <td>
-                  <StatusBadge tone={getTaskTone(task.status)}>{formatTaskStatus(task.status)}</StatusBadge>
-                </td>
-                <td>{formatTaskProgress(task)}</td>
-                <td>{formatTransferSpeed(task.speed)}</td>
-                <td className="task-current-cell">
-                  <div>{task.current_file || task.dst_label}</div>
-                  {task.error_message ? (
-                    <details>
-                      <summary>{t('common.viewFailureDetails')}</summary>
-                      <p>{task.error_message}</p>
-                    </details>
-                  ) : null}
-                </td>
-                <td>
-                  <div className="inline-actions compact-actions">
-                    <button type="button" className="row-action" onClick={() => void pauseMutation.mutateAsync(task.task_id)}>
-                      {t('task.action.pause')}
-                    </button>
-                    <button type="button" className="row-action" onClick={() => void resumeMutation.mutateAsync(task.task_id)}>
-                      {t('task.action.resume')}
-                    </button>
-                    <button type="button" className="row-action" onClick={() => void cancelMutation.mutateAsync(task.task_id)}>
-                      {t('task.action.cancel')}
-                    </button>
-                    <button type="button" className="row-action" onClick={() => void restartMutation.mutateAsync(task.task_id)}>
-                      {t('task.action.restart')}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {sortedItems.map((task) => {
+              const progressPercent = clampProgress(task.progress_percent);
+              const clientUploadTask = isClientWorkspaceUploadTask(task);
+              return (
+                <tr key={task.task_id} className={`task-row status-${task.status}`}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={checkedIds.includes(task.task_id)}
+                      onChange={(event) => {
+                        setCheckedIds((current) =>
+                          event.target.checked
+                            ? [...current, task.task_id]
+                            : current.filter((taskId) => taskId !== task.task_id),
+                        );
+                      }}
+                    />
+                  </td>
+                  <td className="mono-cell">{task.task_id.slice(0, 8)}</td>
+                  <td>{formatDirection(task.src_endpoint_type, task.dst_endpoint_type)}</td>
+                  <td>{task.engine.toUpperCase()}</td>
+                  <td>
+                    <StatusBadge tone={getTaskTone(task.status)}>{formatTaskStatus(task.status)}</StatusBadge>
+                  </td>
+                  <td>
+                    <div className="task-progress-cell">
+                      <div className="task-progress-bar" aria-hidden="true">
+                        <span className="task-progress-fill" style={{ width: `${progressPercent}%` }} />
+                      </div>
+                      <div className="task-progress-copy">{formatTaskProgress(task)}</div>
+                    </div>
+                  </td>
+                  <td>{formatTransferSpeed(task.speed)}</td>
+                  <td className="task-current-cell">
+                    <div>{task.current_file || task.dst_label}</div>
+                    {task.error_message ? (
+                      <details>
+                        <summary>{t('common.viewFailureDetails')}</summary>
+                        <p>{task.error_message}</p>
+                      </details>
+                    ) : null}
+                  </td>
+                  <td>
+                    <div className="inline-actions compact-actions">
+                      {clientUploadTask ? (
+                        !task.is_finished ? (
+                          <button type="button" className="row-action" onClick={() => cancelClientTask(task.task_id)}>
+                            {t('task.action.cancel')}
+                          </button>
+                        ) : null
+                      ) : (
+                        <>
+                          <button type="button" className="row-action" onClick={() => void pauseMutation.mutateAsync(task.task_id)}>
+                            {t('task.action.pause')}
+                          </button>
+                          <button type="button" className="row-action" onClick={() => void resumeMutation.mutateAsync(task.task_id)}>
+                            {t('task.action.resume')}
+                          </button>
+                          <button type="button" className="row-action" onClick={() => void cancelMutation.mutateAsync(task.task_id)}>
+                            {t('task.action.cancel')}
+                          </button>
+                          <button type="button" className="row-action" onClick={() => void restartMutation.mutateAsync(task.task_id)}>
+                            {t('task.action.restart')}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

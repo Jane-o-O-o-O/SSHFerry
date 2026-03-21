@@ -1,4 +1,4 @@
-﻿import { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { ApiError, getErrorMessage } from '../../api/http';
@@ -25,6 +25,8 @@ interface RemotePaneProps {
   ) => void | Promise<void>;
 }
 
+const EMPTY_REMOTE_SELECTION: string[] = [];
+
 export function RemotePane({
   pane,
   onCloseSession,
@@ -35,7 +37,7 @@ export function RemotePane({
   const queryClient = useQueryClient();
   const localSelection = useWorkspaceStore((state) => state.localSelection);
   const localCurrentPath = useWorkspaceStore((state) => state.localCurrentPath);
-  const remoteSelection = useWorkspaceStore((state) => state.remoteSelections[pane.sessionId] ?? []);
+  const remoteSelection = useWorkspaceStore((state) => state.remoteSelections[pane.sessionId] ?? EMPTY_REMOTE_SELECTION);
   const activePaneId = useWorkspaceStore((state) => state.activePaneId);
   const setActivePane = useWorkspaceStore((state) => state.setActivePane);
   const setPanePath = useWorkspaceStore((state) => state.setPanePath);

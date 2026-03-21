@@ -1,9 +1,9 @@
-﻿"""Task orchestration service for backend APIs."""
+"""Task orchestration service for backend APIs."""
 from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 import uuid
 
@@ -14,9 +14,12 @@ from backend.app.schemas.tasks import (
     TaskCreateDownloadRequest,
     TaskCreateRemoteCopyRequest,
     TaskCreateUploadRequest,
+    TaskCreateWorkspaceDownloadRequest,
+    TaskCreateWorkspaceUploadRequest,
     TaskResponse,
 )
 from backend.app.services.app_state import AppState
+from backend.app.services.workspace_service import WorkspaceService
 from src.shared.models import SiteConfig, Task
 
 
@@ -30,14 +33,14 @@ class TaskService:
     def __init__(self, app_state: AppState):
         self.app_state = app_state
 
-    def list_tasks(self) -> list[TaskResponse]:
+    def list_tasks(self, user_id: str) -> list[TaskResponse]:
         scheduler = self._require_scheduler()
-        tasks = scheduler.get_all_tasks()
+        tasks = [task for task in scheduler.get_all_tasks() if self._task_belongs_to_user(task, user_id)]
         return [self._to_response(task) for task in tasks]
 
-    def create_upload(self, payload: TaskCreateUploadRequest) -> TaskResponse:
+    def create_upload(self, payload: TaskCreateUploadRequest, user_id: str) -> TaskResponse:
         scheduler = self._require_scheduler()
-        site = self._require_session(payload.session_id)
+        site = self._require_session(payload.session_id, user_id)
         local_path = self._resolve_local_path(payload.local_path, require_exists=True)
         remote_path = self._require_non_blank_remote_path(payload.remote_path)
 
@@ -50,6 +53,7 @@ class TaskService:
                 src=str(local_path),
                 dst=remote_path,
                 bytes_total=total_bytes,
+                owner_user_id=user_id,
                 subtask_count=max(1, total_files),
                 src_endpoint_type='local',
                 dst_endpoint_type='remote',
@@ -67,6 +71,7 @@ class TaskService:
                 src=str(local_path),
                 dst=remote_path,
                 bytes_total=file_size,
+                owner_user_id=user_id,
                 src_endpoint_type='local',
                 dst_endpoint_type='remote',
                 dst_session_id=payload.session_id,
@@ -78,9 +83,55 @@ class TaskService:
         scheduler.add_task(task)
         return self._to_response(task)
 
-    def create_download(self, payload: TaskCreateDownloadRequest) -> TaskResponse:
+    def create_upload_from_workspace(self, payload: TaskCreateWorkspaceUploadRequest, user_id: str) -> TaskResponse:
         scheduler = self._require_scheduler()
-        site = self._require_session(payload.session_id)
+        site = self._require_session(payload.session_id, user_id)
+        workspace_service = self._workspace_service()
+        workspace_path = workspace_service.resolve_workspace_path(user_id, payload.workspace_path, require_exists=True)
+        remote_path = self._require_non_blank_remote_path(payload.remote_path)
+
+        if workspace_path.is_dir():
+            total_files, total_bytes = self._scan_local_dir(workspace_path)
+            task = Task(
+                task_id=str(uuid.uuid4()),
+                kind='folder_transfer',
+                engine='sftp',
+                src=str(workspace_path),
+                dst=remote_path,
+                bytes_total=total_bytes,
+                owner_user_id=user_id,
+                subtask_count=max(1, total_files),
+                src_endpoint_type='local',
+                dst_endpoint_type='remote',
+                dst_session_id=payload.session_id,
+                dst_site_snapshot=site,
+                dst_display_name=site.name,
+                status='pending',
+            )
+        else:
+            file_size = int(workspace_path.stat().st_size)
+            task = Task(
+                task_id=str(uuid.uuid4()),
+                kind='file_transfer',
+                engine=self._resolve_file_engine(site, file_size, payload.engine, scheduler),
+                src=str(workspace_path),
+                dst=remote_path,
+                bytes_total=file_size,
+                owner_user_id=user_id,
+                src_endpoint_type='local',
+                dst_endpoint_type='remote',
+                dst_session_id=payload.session_id,
+                dst_site_snapshot=site,
+                dst_display_name=site.name,
+                status='pending',
+            )
+
+        scheduler.add_task(task)
+        return self._to_response(task)
+
+    def create_download(self, payload: TaskCreateDownloadRequest, user_id: str) -> TaskResponse:
+        scheduler = self._require_scheduler()
+        site = self._require_session(payload.session_id, user_id)
         remote_path = self._require_non_blank_remote_path(payload.remote_path)
         local_path = self._resolve_local_path(payload.local_path, require_exists=False)
         engine = self._build_remote_engine(site)
@@ -96,6 +147,7 @@ class TaskService:
                     src=remote_path,
                     dst=str(local_path),
                     bytes_total=total_bytes,
+                    owner_user_id=user_id,
                     subtask_count=max(1, total_files),
                     src_endpoint_type='remote',
                     dst_endpoint_type='local',
@@ -112,6 +164,7 @@ class TaskService:
                     src=remote_path,
                     dst=str(local_path),
                     bytes_total=int(remote_entry.size),
+                    owner_user_id=user_id,
                     src_endpoint_type='remote',
                     dst_endpoint_type='local',
                     src_session_id=payload.session_id,
@@ -125,10 +178,61 @@ class TaskService:
         scheduler.add_task(task)
         return self._to_response(task)
 
-    def create_remote_copy(self, payload: TaskCreateRemoteCopyRequest) -> TaskResponse:
+    def create_download_to_workspace(self, payload: TaskCreateWorkspaceDownloadRequest, user_id: str) -> TaskResponse:
         scheduler = self._require_scheduler()
-        src_site = self._require_session(payload.src_session_id)
-        dst_site = self._require_session(payload.dst_session_id)
+        site = self._require_session(payload.session_id, user_id)
+        remote_path = self._require_non_blank_remote_path(payload.remote_path)
+        workspace_service = self._workspace_service()
+        workspace_path = workspace_service.resolve_workspace_path(user_id, payload.workspace_path, require_exists=False)
+        workspace_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = self._build_remote_engine(site)
+        try:
+            engine.connect()
+            remote_entry = engine.stat(remote_path)
+            if remote_entry.is_dir:
+                total_files, total_bytes = self._scan_remote_dir(engine, remote_path)
+                task = Task(
+                    task_id=str(uuid.uuid4()),
+                    kind='folder_transfer',
+                    engine='sftp',
+                    src=remote_path,
+                    dst=str(workspace_path),
+                    bytes_total=total_bytes,
+                    owner_user_id=user_id,
+                    subtask_count=max(1, total_files),
+                    src_endpoint_type='remote',
+                    dst_endpoint_type='local',
+                    src_session_id=payload.session_id,
+                    src_site_snapshot=site,
+                    src_display_name=site.name,
+                    status='pending',
+                )
+            else:
+                task = Task(
+                    task_id=str(uuid.uuid4()),
+                    kind='file_transfer',
+                    engine=self._resolve_file_engine(site, int(remote_entry.size), payload.engine, scheduler),
+                    src=remote_path,
+                    dst=str(workspace_path),
+                    bytes_total=int(remote_entry.size),
+                    owner_user_id=user_id,
+                    src_endpoint_type='remote',
+                    dst_endpoint_type='local',
+                    src_session_id=payload.session_id,
+                    src_site_snapshot=site,
+                    src_display_name=site.name,
+                    status='pending',
+                )
+        finally:
+            self._disconnect_quietly(engine)
+
+        scheduler.add_task(task)
+        return self._to_response(task)
+
+    def create_remote_copy(self, payload: TaskCreateRemoteCopyRequest, user_id: str) -> TaskResponse:
+        scheduler = self._require_scheduler()
+        src_site = self._require_session(payload.src_session_id, user_id)
+        dst_site = self._require_session(payload.dst_session_id, user_id)
         src_path = self._require_non_blank_remote_path(payload.src_path)
         dst_path = self._require_non_blank_remote_path(payload.dst_path)
         engine = self._build_remote_engine(src_site)
@@ -144,6 +248,7 @@ class TaskService:
                     src=src_path,
                     dst=dst_path,
                     bytes_total=total_bytes,
+                    owner_user_id=user_id,
                     subtask_count=max(1, total_files),
                     src_endpoint_type='remote',
                     dst_endpoint_type='remote',
@@ -164,6 +269,7 @@ class TaskService:
                     src=src_path,
                     dst=dst_path,
                     bytes_total=file_size,
+                    owner_user_id=user_id,
                     src_endpoint_type='remote',
                     dst_endpoint_type='remote',
                     src_session_id=payload.src_session_id,
@@ -180,27 +286,31 @@ class TaskService:
         scheduler.add_task(task)
         return self._to_response(task)
 
-    def pause_task(self, task_id: str) -> TaskActionResponse:
+    def pause_task(self, task_id: str, user_id: str) -> TaskActionResponse:
         scheduler = self._require_scheduler()
-        return self._run_control_action(scheduler, task_id, action='pause', runner=scheduler.pause_task)
+        return self._run_control_action(scheduler, task_id, user_id, action='pause', runner=scheduler.pause_task)
 
-    def resume_task(self, task_id: str) -> TaskActionResponse:
+    def resume_task(self, task_id: str, user_id: str) -> TaskActionResponse:
         scheduler = self._require_scheduler()
-        return self._run_control_action(scheduler, task_id, action='resume', runner=scheduler.resume_task)
+        return self._run_control_action(scheduler, task_id, user_id, action='resume', runner=scheduler.resume_task)
 
-    def cancel_task(self, task_id: str) -> TaskActionResponse:
+    def cancel_task(self, task_id: str, user_id: str) -> TaskActionResponse:
         scheduler = self._require_scheduler()
-        return self._run_control_action(scheduler, task_id, action='cancel', runner=scheduler.cancel_task)
+        return self._run_control_action(scheduler, task_id, user_id, action='cancel', runner=scheduler.cancel_task)
 
-    def restart_task(self, task_id: str) -> TaskActionResponse:
+    def restart_task(self, task_id: str, user_id: str) -> TaskActionResponse:
         scheduler = self._require_scheduler()
-        return self._run_control_action(scheduler, task_id, action='restart', runner=scheduler.restart_task)
+        return self._run_control_action(scheduler, task_id, user_id, action='restart', runner=scheduler.restart_task)
 
-    def clear_finished_tasks(self) -> int:
+    def clear_finished_tasks(self, user_id: str) -> int:
         scheduler = self._require_scheduler()
         removed = 0
         with self._task_lock(scheduler):
-            task_ids = [task_id for task_id, task in scheduler.tasks.items() if task.is_finished]
+            task_ids = [
+                task_id
+                for task_id, task in scheduler.tasks.items()
+                if task.is_finished and self._task_belongs_to_user(task, user_id)
+            ]
             for task_id in task_ids:
                 del scheduler.tasks[task_id]
                 scheduler.queued_task_ids.discard(task_id)
@@ -210,9 +320,9 @@ class TaskService:
             scheduler.task_queue = [task_id for task_id in scheduler.task_queue if task_id in scheduler.tasks]
         return removed
 
-    def _run_control_action(self, scheduler: Any, task_id: str, *, action: str, runner) -> TaskActionResponse:
+    def _run_control_action(self, scheduler: Any, task_id: str, user_id: str, *, action: str, runner) -> TaskActionResponse:
         task = scheduler.get_task(task_id)
-        if task is None:
+        if task is None or not self._task_belongs_to_user(task, user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Task '{task_id}' not found",
@@ -235,10 +345,10 @@ class TaskService:
                 detail=str(exc),
             ) from exc
 
-    def _require_session(self, session_id: str) -> SiteConfig:
+    def _require_session(self, session_id: str, user_id: str) -> SiteConfig:
         with self._session_guard():
             site = self.app_state.remote_sessions.get(session_id)
-            if site is None:
+            if site is None or site.owner_user_id not in (None, user_id):
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Session '{session_id}' not found",
@@ -335,24 +445,25 @@ class TaskService:
                 total_bytes += int(entry.size)
         return total_files, total_bytes
 
-    @staticmethod
-    def _to_response(task: Task) -> TaskResponse:
+    def _to_response(self, task: Task) -> TaskResponse:
         error_code = task.error_code.name if task.error_code is not None else None
+        src_endpoint_type, src_path, src_label = self._present_endpoint(task.src_endpoint_type, task.src, task.src_endpoint.label)
+        dst_endpoint_type, dst_path, dst_label = self._present_endpoint(task.dst_endpoint_type, task.dst, task.dst_endpoint.label)
         return TaskResponse(
             task_id=task.task_id,
             kind=task.kind,
             engine=task.engine,
             status=task.status,
-            src=task.src,
-            dst=task.dst,
-            src_endpoint_type=task.src_endpoint_type,
-            dst_endpoint_type=task.dst_endpoint_type,
+            src=src_path,
+            dst=dst_path,
+            src_endpoint_type=src_endpoint_type,
+            dst_endpoint_type=dst_endpoint_type,
             src_session_id=task.src_session_id,
             dst_session_id=task.dst_session_id,
             src_display_name=task.src_display_name,
             dst_display_name=task.dst_display_name,
-            src_label=task.src_endpoint.label,
-            dst_label=task.dst_endpoint.label,
+            src_label=src_label,
+            dst_label=dst_label,
             bytes_total=task.bytes_total,
             bytes_done=task.bytes_done,
             progress_percent=task.progress_percent,
@@ -370,6 +481,38 @@ class TaskService:
             current_file=task.current_file,
             is_finished=task.is_finished,
         )
+
+    def _present_endpoint(self, endpoint_type: str, path: str, fallback_label: str) -> tuple[str, str, str]:
+        if endpoint_type != 'local':
+            return endpoint_type, path, fallback_label
+
+        runtime_settings = getattr(self.app_state, 'runtime_settings', None)
+        workspace_root = getattr(runtime_settings, 'workspace_root', None)
+        if workspace_root is None:
+            return endpoint_type, path, fallback_label
+
+        try:
+            root_path = Path(workspace_root).expanduser().resolve(strict=False)
+            actual_path = Path(path).expanduser().resolve(strict=False)
+            relative = actual_path.relative_to(root_path)
+        except Exception:
+            return endpoint_type, path, fallback_label
+
+        parts = relative.parts
+        workspace_parts = parts[1:] if len(parts) > 1 else ()
+        virtual_path = '/' if not workspace_parts else '/' + PurePosixPath(*workspace_parts).as_posix().lstrip('/')
+        return 'workspace', virtual_path, f'workspace:{virtual_path}'
+
+    @staticmethod
+    def _task_belongs_to_user(task: Task, user_id: str) -> bool:
+        return task.owner_user_id in (None, user_id)
+
+    def _workspace_service(self) -> WorkspaceService:
+        runtime_settings = getattr(self.app_state, 'runtime_settings', None)
+        workspace_root = getattr(runtime_settings, 'workspace_root', None)
+        if workspace_root is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail='Workspace root is unavailable.')
+        return WorkspaceService(Path(workspace_root))
 
     @staticmethod
     def _disconnect_quietly(engine) -> None:
