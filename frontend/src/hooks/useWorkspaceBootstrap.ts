@@ -8,6 +8,7 @@ import { useWorkspaceStore } from '../store/workspace';
 
 export function useWorkspaceBootstrap() {
   const authReady = useAuthStore((state) => state.status === 'authenticated');
+  const health = useAuthStore((state) => state.health);
   const selectedSiteName = useWorkspaceStore((state) => state.selectedSiteName);
   const localCurrentPath = useWorkspaceStore((state) => state.localCurrentPath);
   const setSelectedSiteName = useWorkspaceStore((state) => state.setSelectedSiteName);
@@ -41,8 +42,10 @@ export function useWorkspaceBootstrap() {
     if (!authReady || localCurrentPath) {
       return;
     }
-    setLocalPath('/');
-  }, [authReady, localCurrentPath, setLocalPath]);
+    if (health?.runtime_mode === 'deployed-web') {
+      setLocalPath('/');
+    }
+  }, [authReady, health?.runtime_mode, localCurrentPath, setLocalPath]);
 
   useEffect(() => {
     if (!sessionsQuery.data) {

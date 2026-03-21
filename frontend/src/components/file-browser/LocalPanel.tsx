@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { getHealth } from '../../api/auth';
 import { ApiError, getErrorMessage } from '../../api/http';
+import { listLocalDrives, listLocalFiles } from '../../api/localFiles';
 import {
   deleteWorkspaceItems,
   listWorkspaceItems,
@@ -136,17 +137,26 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
   const pushToast = useUiStore((state) => state.pushToast);
   const { t } = useI18n();
 
-  const currentPath = localCurrentPath || '/';
+  const isDirectLocalMode = health?.runtime_mode === 'local-dev';
+  const currentPath = localCurrentPath || (isDirectLocalMode ? '' : '/');
   const resetSupported = health?.features?.includes('workspace-reset') ?? false;
+  const localDrivesQuery = useQuery({
+    queryKey: ['local-drives'],
+    queryFn: listLocalDrives,
+    enabled: isDirectLocalMode,
+    staleTime: 60000,
+  });
 
   const listingQuery = useQuery({
-    queryKey: ['workspace-list', currentPath],
-    queryFn: () => listWorkspaceItems(currentPath),
+    queryKey: [isDirectLocalMode ? 'local-files-list' : 'workspace-list', currentPath],
+    queryFn: () => (isDirectLocalMode ? listLocalFiles(currentPath) : listWorkspaceItems(currentPath)),
+    enabled: isDirectLocalMode ? Boolean(currentPath.trim()) : true,
   });
 
   const statsQuery = useQuery({
     queryKey: ['workspace-stat', currentPath],
     queryFn: () => statWorkspacePath(currentPath),
+    enabled: !isDirectLocalMode,
   });
 
   const uploadMutation = useMutation({ mutationFn: uploadWorkspaceFiles });
@@ -154,13 +164,20 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
   const resetMutation = useMutation({ mutationFn: resetWorkspaceData });
 
   const selectedEntries = listingQuery.data?.items.filter((entry) => localSelection.includes(entry.path)) ?? [];
-  const summary = statsQuery.data
+  const summary = !isDirectLocalMode && statsQuery.data
     ? t('localPanel.summary', {
         files: statsQuery.data.file_count,
         dirs: statsQuery.data.dir_count,
         size: formatBytes(statsQuery.data.total_size),
       })
     : null;
+
+  useEffect(() => {
+    if (!isDirectLocalMode || localCurrentPath || !localDrivesQuery.data?.items.length) {
+      return;
+    }
+    setLocalPath(localDrivesQuery.data.items[0].path);
+  }, [isDirectLocalMode, localCurrentPath, localDrivesQuery.data?.items, setLocalPath]);
 
   useEffect(() => {
     if (!listingQuery.data) {
@@ -172,7 +189,7 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
   }, [currentPath, listingQuery.data, setLocalPath]);
 
   async function refreshWorkspace() {
-    await Promise.all([listingQuery.refetch(), statsQuery.refetch()]);
+    await Promise.all([listingQuery.refetch(), ...(!isDirectLocalMode ? [statsQuery.refetch()] : [])]);
   }
 
   function closeUploadMenu() {
@@ -377,8 +394,8 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
     <section className="panel-shell local-panel">
       <header className="panel-header local-panel-header">
         <div className="local-panel-header-copy">
-          <h3>{t('localPanel.title')}</h3>
-          <p>{t('localPanel.description')}</p>
+          <h3>{isDirectLocalMode ? t('localPanel.localModeTitle') : t('localPanel.title')}</h3>
+          <p>{isDirectLocalMode ? t('localPanel.localModeDescription') : t('localPanel.description')}</p>
           {summary ? <p className="mono-cell">{summary}</p> : null}
         </div>
         <div className="local-panel-actions">
@@ -397,70 +414,99 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
           <button type="button" className="ghost-button" onClick={() => void refreshWorkspace()}>
             {t('common.refresh')}
           </button>
-          <details ref={uploadMenuRef} className="local-panel-upload-menu">
-            <summary className="ghost-button local-panel-upload-trigger">{t('localPanel.uploadAction')}</summary>
-            <div className="local-panel-upload-sheet">
+          {isDirectLocalMode && localDrivesQuery.data?.items.length ? (
+            <select
+              className="local-drive-select"
+              value={
+                localDrivesQuery.data.items.find((drive) => currentPath.startsWith(drive.path))
+                  ?.path ?? ''
+              }
+              onChange={(event) => {
+                if (event.target.value) {
+                  setLocalPath(event.target.value);
+                }
+              }}
+            >
+              <option value="">{t('localPanel.localModeDrivePlaceholder')}</option>
+              {localDrivesQuery.data.items.map((drive) => (
+                <option key={drive.path} value={drive.path}>
+                  {drive.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {!isDirectLocalMode ? (
+            <>
+              <details ref={uploadMenuRef} className="local-panel-upload-menu">
+                <summary className="ghost-button local-panel-upload-trigger">{t('localPanel.uploadAction')}</summary>
+                <div className="local-panel-upload-sheet">
+                  <button
+                    type="button"
+                    className="local-panel-upload-option"
+                    onClick={() => {
+                      closeUploadMenu();
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    {t('localPanel.uploadFiles')}
+                  </button>
+                  <button
+                    type="button"
+                    className="local-panel-upload-option"
+                    onClick={() => {
+                      closeUploadMenu();
+                      folderInputRef.current?.click();
+                    }}
+                  >
+                    {t('localPanel.uploadFolder')}
+                  </button>
+                </div>
+              </details>
               <button
                 type="button"
-                className="local-panel-upload-option"
-                onClick={() => {
-                  closeUploadMenu();
-                  fileInputRef.current?.click();
-                }}
+                className="ghost-button danger-text"
+                disabled={!selectedEntries.length}
+                onClick={handleDelete}
               >
-                {t('localPanel.uploadFiles')}
+                {t('localPanel.deleteSelected')}
               </button>
               <button
                 type="button"
-                className="local-panel-upload-option"
-                onClick={() => {
-                  closeUploadMenu();
-                  folderInputRef.current?.click();
-                }}
+                className="ghost-button danger-text"
+                disabled={resetMutation.isPending}
+                title={!resetSupported ? t('localPanel.resetBackendRestartRequired') : undefined}
+                onClick={handleResetAll}
               >
-                {t('localPanel.uploadFolder')}
+                {t('localPanel.resetAction')}
               </button>
-            </div>
-          </details>
-          <button
-            type="button"
-            className="ghost-button danger-text"
-            disabled={!selectedEntries.length}
-            onClick={handleDelete}
-          >
-            {t('localPanel.deleteSelected')}
-          </button>
-          <button
-            type="button"
-            className="ghost-button danger-text"
-            disabled={resetMutation.isPending}
-            title={!resetSupported ? t('localPanel.resetBackendRestartRequired') : undefined}
-            onClick={handleResetAll}
-          >
-            {t('localPanel.resetAction')}
-          </button>
+            </>
+          ) : null}
         </div>
-        <input
-          ref={fileInputRef}
-          hidden
-          type="file"
-          multiple
-          onChange={(event) => {
-            void handleUploadSelection(event.target.files);
-            event.currentTarget.value = '';
-          }}
-        />
-        <input
-          ref={folderInputRef}
-          hidden
-          type="file"
-          multiple
-          {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
-          onChange={(event) => {
-            void handleUploadSelection(event.target.files);
-            event.currentTarget.value = '';
-          }}
-        />
+        {!isDirectLocalMode ? (
+          <>
+            <input
+              ref={fileInputRef}
+              hidden
+              type="file"
+              multiple
+              onChange={(event) => {
+                void handleUploadSelection(event.target.files);
+                event.currentTarget.value = '';
+              }}
+            />
+            <input
+              ref={folderInputRef}
+              hidden
+              type="file"
+              multiple
+              {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+              onChange={(event) => {
+                void handleUploadSelection(event.target.files);
+                event.currentTarget.value = '';
+              }}
+            />
+          </>
+        ) : null}
       </header>
       <div className="path-bar">
         <input
@@ -471,14 +517,14 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
               setLocalPath(localPathDraft.trim());
             }
           }}
-          placeholder={t('localPanel.pathPlaceholder')}
+          placeholder={isDirectLocalMode ? t('localPanel.localModePathPlaceholder') : t('localPanel.pathPlaceholder')}
         />
       </div>
       <FileTable
         entries={listingQuery.data?.items ?? []}
         selectedPaths={localSelection}
         currentPath={listingQuery.data?.current_path || currentPath}
-        emptyMessage={t('localPanel.empty')}
+        emptyMessage={isDirectLocalMode ? t('localPanel.localModeEmpty') : t('localPanel.empty')}
         isLoading={listingQuery.isPending}
         errorMessage={listingQuery.error ? getErrorMessage(listingQuery.error, t('localPanel.loadError')) : null}
         onSelect={(path, multi) => toggleLocalSelection(path, multi)}

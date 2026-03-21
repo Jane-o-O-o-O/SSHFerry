@@ -15,6 +15,13 @@ router = APIRouter(tags=['health'])
 def get_health(app_state: AppState = Depends(get_app_state)) -> dict[str, object]:
     """Return basic liveness and backend runtime status."""
     settings = app_state.runtime_settings
+    features = [
+        'activity-feed',
+        'debug-logs',
+        'workspace-reset',
+    ]
+    if settings.runtime_mode == 'local-dev':
+        features.append('local-files')
     return {
         'status': 'ok' if app_state.is_ready else 'degraded',
         'service': 'sshferry-backend',
@@ -30,9 +37,5 @@ def get_health(app_state: AppState = Depends(get_app_state)) -> dict[str, object
         'access_cookie_name': settings.access_cookie_name,
         'refresh_cookie_name': settings.refresh_cookie_name,
         'workspace_root': str(settings.workspace_root),
-        'features': [
-            'activity-feed',
-            'debug-logs',
-            'workspace-reset',
-        ],
+        'features': features,
     }
