@@ -274,7 +274,7 @@ def test_remote_copy_endpoint_creates_remote_to_remote_task(monkeypatch):
     assert body['bytes_total'] == 9
 
 
-def test_remote_copy_endpoint_prefers_dualpath_for_large_file(monkeypatch):
+def test_remote_copy_endpoint_keeps_auto_remote_copy_on_sftp_for_large_file(monkeypatch):
     class FakeEngine:
         def connect(self):
             return None
@@ -303,7 +303,7 @@ def test_remote_copy_endpoint_prefers_dualpath_for_large_file(monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body['engine'] == 'dualpath'
+    assert body['engine'] == 'sftp'
     assert body['bytes_total'] == 200 * 1024 * 1024
 
 

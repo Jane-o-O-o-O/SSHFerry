@@ -403,8 +403,11 @@ class TaskService:
     def _resolve_remote_copy_engine(requested_engine: str, file_size: int, scheduler: Any) -> str:
         if requested_engine in ('sftp', 'scp', 'parallel', 'dualpath'):
             return requested_engine
+        # Keep web remote-copy "auto" aligned with the desktop client:
+        # default to "sftp" so the execution layer can still try direct copy
+        # first, then fall back to dualpath/parallel bridge/bridge as needed.
         if file_size >= TaskService._remote_dualpath_threshold(scheduler):
-            return 'dualpath'
+            return 'sftp'
         return 'sftp'
 
     @staticmethod
