@@ -1,4 +1,4 @@
-﻿"""Tests for task creation and control APIs."""
+"""Tests for task creation and control APIs."""
 from dataclasses import replace
 from pathlib import Path
 import secrets
@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.api.deps import X_SSHFERRY_TOKEN
 from backend.app.main import create_app
+from backend.app.services.activity_service import ActivityService
 from backend.app.services.task_service import TaskService
 from src.shared.models import SiteConfig, Task
 
@@ -80,13 +81,23 @@ class FakeScheduler:
 
 
 class FakeAppState:
-    def __init__(self, scheduler: FakeScheduler | None = None, remote_sessions: dict[str, SiteConfig] | None = None):
+    def __init__(
+        self,
+        scheduler: FakeScheduler | None = None,
+        remote_sessions: dict[str, SiteConfig] | None = None,
+        workspace_root: Path | None = None,
+    ):
         self.scheduler = scheduler or FakeScheduler()
         self.remote_sessions = remote_sessions or {}
         self.session_lock = Lock()
         self.auth_token = secrets.token_urlsafe(16)
         self.startup_error = None
         self.site_store = None
+        self.runtime_settings = SimpleNamespace(
+            workspace_root=workspace_root or Path('.workspace'),
+            legacy_local_token_enabled=True,
+        )
+        self.activity_service = ActivityService()
 
     def start(self):
         return None
@@ -157,6 +168,7 @@ def test_upload_task_endpoint_creates_file_transfer_with_auto_engine():
                     'engine': 'auto',
                 },
             )
+            activity = client.get('/api/activity')
 
         assert response.status_code == 201
         body = response.json()
@@ -167,6 +179,8 @@ def test_upload_task_endpoint_creates_file_transfer_with_auto_engine():
         assert body['dst_session_id'] == 'session-1'
         assert body['bytes_total'] == 11
         assert body['status'] == 'pending'
+        assert activity.status_code == 200
+        assert activity.json()['items'][-1]['title'] == 'Upload queued'
 
     _run_in_temp_fs('upload_file', runner)
 
@@ -389,3 +403,73 @@ def test_task_routes_reject_blank_remote_path():
         assert response.json()['detail'] == 'Remote path must not be blank'
 
     _run_in_temp_fs('blank-remote-path', runner)
+
+def test_upload_from_workspace_endpoint_maps_virtual_workspace_path():
+    def runner(base_dir: Path):
+        workspace_root = base_dir / 'workspace-root'
+        source_file = workspace_root / 'local-dev-owner' / 'docs' / 'report.txt'
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text('report-body', encoding='utf-8')
+        state = FakeAppState(remote_sessions={'session-1': REMOTE_SITE}, workspace_root=workspace_root)
+
+        with _build_test_client(state) as client:
+            response = client.post(
+                '/api/tasks/upload-from-workspace',
+                json={
+                    'session_id': 'session-1',
+                    'workspace_path': '/docs/report.txt',
+                    'remote_path': '/remote/report.txt',
+                    'engine': 'auto',
+                },
+            )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body['src'] == '/docs/report.txt'
+        assert body['src_endpoint_type'] == 'workspace'
+        assert body['src_label'] == 'workspace:/docs/report.txt'
+        assert body['dst'] == '/remote/report.txt'
+        assert body['bytes_total'] == 11
+
+    _run_in_temp_fs('upload_from_workspace', runner)
+
+
+def test_download_to_workspace_endpoint_uses_workspace_destination(monkeypatch):
+    class FakeEngine:
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+        def stat(self, path):
+            assert path == '/remote/export.txt'
+            return SimpleNamespace(name='export.txt', path=path, is_dir=False, size=12, mtime=1.0, mode=None)
+
+    monkeypatch.setattr(TaskService, '_build_remote_engine', staticmethod(lambda _site: FakeEngine()))
+
+    def runner(base_dir: Path):
+        workspace_root = base_dir / 'workspace-root'
+        state = FakeAppState(remote_sessions={'session-1': REMOTE_SITE}, workspace_root=workspace_root)
+
+        with _build_test_client(state) as client:
+            response = client.post(
+                '/api/tasks/download-to-workspace',
+                json={
+                    'session_id': 'session-1',
+                    'remote_path': '/remote/export.txt',
+                    'workspace_path': '/downloads/export.txt',
+                    'engine': 'auto',
+                },
+            )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body['src'] == '/remote/export.txt'
+        assert body['dst'] == '/downloads/export.txt'
+        assert body['dst_endpoint_type'] == 'workspace'
+        assert body['dst_label'] == 'workspace:/downloads/export.txt'
+        assert body['bytes_total'] == 12
+        assert (workspace_root / 'local-dev-owner' / 'downloads').exists()
+
+    _run_in_temp_fs('download_to_workspace', runner)

@@ -3,8 +3,8 @@ import { RouterProvider } from 'react-router-dom';
 
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { ToastViewport } from '../components/common/ToastViewport';
-import { useBackendSession } from '../hooks/useBackendSession';
-import { useLogSocket } from '../hooks/useLogSocket';
+import { useAuthBootstrap } from '../hooks/useBackendSession';
+import { useActivitySocket } from '../hooks/useActivitySocket';
 import { useTaskSocket } from '../hooks/useTaskSocket';
 import { useWorkspaceBootstrap } from '../hooks/useWorkspaceBootstrap';
 import { I18nProvider } from '../i18n';
@@ -23,10 +23,10 @@ const queryClient = new QueryClient({
 });
 
 function AppRuntime() {
-  useBackendSession();
+  useAuthBootstrap();
   useWorkspaceBootstrap();
   useTaskSocket();
-  useLogSocket();
+  useActivitySocket();
   return null;
 }
 

@@ -1,4 +1,4 @@
-﻿"""Pydantic schemas for task APIs."""
+"""Pydantic schemas for task APIs."""
 from __future__ import annotations
 
 from typing import Literal
@@ -60,12 +60,30 @@ class TaskCreateUploadRequest(BaseModel):
     engine: TaskEngine = 'auto'
 
 
+class TaskCreateWorkspaceUploadRequest(BaseModel):
+    """Create a workspace-to-remote transfer task."""
+
+    session_id: str = Field(min_length=1)
+    workspace_path: str = Field(min_length=1)
+    remote_path: str = Field(min_length=1)
+    engine: TaskEngine = 'auto'
+
+
 class TaskCreateDownloadRequest(BaseModel):
     """Create a remote-to-local transfer task."""
 
     session_id: str = Field(min_length=1)
     remote_path: str = Field(min_length=1)
     local_path: str = Field(min_length=1)
+    engine: TaskEngine = 'auto'
+
+
+class TaskCreateWorkspaceDownloadRequest(BaseModel):
+    """Create a remote-to-workspace transfer task."""
+
+    session_id: str = Field(min_length=1)
+    remote_path: str = Field(min_length=1)
+    workspace_path: str = Field(min_length=1)
     engine: TaskEngine = 'auto'
 
 
@@ -85,4 +103,3 @@ class TaskActionResponse(BaseModel):
     task_id: str
     action: str
     status: str
-

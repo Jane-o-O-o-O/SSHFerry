@@ -1,6 +1,10 @@
-﻿"""Tests for realtime task websocket APIs."""
+"""Tests for realtime task websocket APIs."""
+from __future__ import annotations
+
 from dataclasses import replace
+from pathlib import Path
 import secrets
+import shutil
 from threading import Lock
 
 from fastapi.testclient import TestClient
@@ -8,6 +12,8 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from backend.app.main import create_app
+from backend.app.services.app_state import AppState
+from src.services.site_store import SiteStore
 from src.shared.models import Task
 
 
@@ -52,7 +58,7 @@ class FakeAppState:
         return self.scheduler
 
 
-def _build_test_client(state: FakeAppState) -> TestClient:
+def _build_test_client(state) -> TestClient:
     app = create_app(app_state_factory=lambda: state)
     return TestClient(app)
 
@@ -104,6 +110,27 @@ def test_tasks_websocket_pushes_update_when_snapshot_changes():
     assert updated['total'] == 1
     assert updated['items'][0]['task_id'] == 'task-2'
     assert updated['items'][0]['status'] == 'running'
+
+
+def test_tasks_websocket_accepts_cookie_auth_after_me_bootstrap():
+    base_dir = Path('.tmp_test_backend_ws_cookie')
+    if base_dir.exists():
+        shutil.rmtree(base_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        state = AppState(site_store=SiteStore(path=base_dir / 'sites.json'))
+        with _build_test_client(state) as client:
+            me = client.get('/api/auth/me')
+            assert me.status_code == 200
+
+            with client.websocket_connect('/api/ws/tasks') as websocket:
+                message = websocket.receive_json()
+
+        assert message['type'] == 'task_snapshot'
+        assert message['total'] == 0
+    finally:
+        if base_dir.exists():
+            shutil.rmtree(base_dir)
 
 
 def test_tasks_websocket_rejects_invalid_token():

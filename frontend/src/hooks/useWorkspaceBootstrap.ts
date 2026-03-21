@@ -1,14 +1,13 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { listLocalDrives } from '../api/localFiles';
 import { listSessions } from '../api/sessions';
 import { listSites } from '../api/sites';
 import { useAuthStore } from '../store/auth';
 import { useWorkspaceStore } from '../store/workspace';
 
 export function useWorkspaceBootstrap() {
-  const authReady = useAuthStore((state) => state.status === 'ready');
+  const authReady = useAuthStore((state) => state.status === 'authenticated');
   const selectedSiteName = useWorkspaceStore((state) => state.selectedSiteName);
   const localCurrentPath = useWorkspaceStore((state) => state.localCurrentPath);
   const setSelectedSiteName = useWorkspaceStore((state) => state.setSelectedSiteName);
@@ -29,13 +28,6 @@ export function useWorkspaceBootstrap() {
     staleTime: 5000,
   });
 
-  const drivesQuery = useQuery({
-    queryKey: ['local-drives'],
-    queryFn: listLocalDrives,
-    enabled: authReady,
-    staleTime: 60000,
-  });
-
   useEffect(() => {
     if (!sitesQuery.data?.items.length) {
       return;
@@ -46,11 +38,11 @@ export function useWorkspaceBootstrap() {
   }, [selectedSiteName, setSelectedSiteName, sitesQuery.data?.items]);
 
   useEffect(() => {
-    if (!drivesQuery.data?.items.length || localCurrentPath) {
+    if (!authReady || localCurrentPath) {
       return;
     }
-    setLocalPath(drivesQuery.data.items[0].path);
-  }, [drivesQuery.data?.items, localCurrentPath, setLocalPath]);
+    setLocalPath('/');
+  }, [authReady, localCurrentPath, setLocalPath]);
 
   useEffect(() => {
     if (!sessionsQuery.data) {
@@ -62,6 +54,5 @@ export function useWorkspaceBootstrap() {
   return {
     sitesQuery,
     sessionsQuery,
-    drivesQuery,
   };
 }

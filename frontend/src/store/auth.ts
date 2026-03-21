@@ -1,50 +1,73 @@
 import { create } from 'zustand';
 
-import type { AuthSessionResponse, HealthResponse } from '../api/types';
+import type { AuthUserResponse, HealthResponse } from '../api/types';
 
-type AuthStatus = 'idle' | 'loading' | 'ready' | 'error';
+type AuthStatus = 'idle' | 'bootstrapping' | 'authenticated' | 'anonymous' | 'error';
 
 interface AuthState {
   status: AuthStatus;
-  token: string | null;
-  headerName: string;
+  user: AuthUserResponse | null;
   health: HealthResponse | null;
   initError: string | null;
-  setLoading: () => void;
-  setBackendSession: (payload: { health: HealthResponse; session: AuthSessionResponse }) => void;
+  authNotice: string | null;
+  setBootstrapping: () => void;
+  setAuthenticated: (payload: { health: HealthResponse; user: AuthUserResponse }) => void;
+  setAnonymous: (payload: { health: HealthResponse; notice?: string | null }) => void;
   setInitError: (message: string) => void;
+  markUnauthenticated: (notice?: string | null) => void;
+  clearAuthNotice: () => void;
   reset: () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   status: 'idle',
-  token: null,
-  headerName: 'X-SSHFerry-Token',
+  user: null,
   health: null,
   initError: null,
-  setLoading: () => set((state) => (state.status === 'ready' ? state : { status: 'loading', initError: null })),
-  setBackendSession: ({ health, session }) =>
+  authNotice: null,
+  setBootstrapping: () =>
+    set((state) =>
+      state.status === 'authenticated' ? state : { ...state, status: 'bootstrapping', initError: null },
+    ),
+  setAuthenticated: ({ health, user }) =>
     set({
-      status: 'ready',
-      token: session.token,
-      headerName: session.header_name || health.auth_header_name || 'X-SSHFerry-Token',
+      status: 'authenticated',
+      user,
       health,
       initError: null,
+      authNotice: null,
+    }),
+  setAnonymous: ({ health, notice = null }) =>
+    set({
+      status: 'anonymous',
+      user: null,
+      health,
+      initError: null,
+      authNotice: notice,
     }),
   setInitError: (message) =>
     set((state) => ({
       status: 'error',
-      token: state.token,
-      headerName: state.headerName,
+      user: null,
       health: state.health,
       initError: message,
+      authNotice: state.authNotice,
     })),
+  markUnauthenticated: (notice = null) =>
+    set((state) => ({
+      status: 'anonymous',
+      user: null,
+      health: state.health,
+      initError: null,
+      authNotice: notice,
+    })),
+  clearAuthNotice: () => set((state) => ({ ...state, authNotice: null })),
   reset: () =>
     set({
       status: 'idle',
-      token: null,
-      headerName: 'X-SSHFerry-Token',
+      user: null,
       health: null,
       initError: null,
+      authNotice: null,
     }),
 }));

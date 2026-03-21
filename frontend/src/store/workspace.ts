@@ -1,8 +1,9 @@
-﻿import { create } from 'zustand';
+import { create } from 'zustand';
 
 import type { SessionResponse } from '../api/types';
 
 export type CenterPanelMode = 'local' | 'remote';
+const EMPTY_PATHS: string[] = [];
 
 export interface RemotePaneState {
   sessionId: string;
@@ -38,6 +39,15 @@ interface WorkspaceState {
   setPaneStale: (sessionId: string, stale: boolean) => void;
   setRemoteSelection: (sessionId: string, paths: string[]) => void;
   toggleRemoteSelection: (sessionId: string, path: string, multi: boolean) => void;
+}
+
+function buildRemoteSelections(
+  sessions: SessionResponse[],
+  remoteSelections: Record<string, string[]>,
+): Record<string, string[]> {
+  return Object.fromEntries(
+    sessions.map((session) => [session.session_id, remoteSelections[session.session_id] ?? EMPTY_PATHS]),
+  );
 }
 
 function upsertSessionPane(panes: RemotePaneState[], session: SessionResponse): RemotePaneState[] {
@@ -111,11 +121,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         (accumulator, session) => upsertSessionPane(accumulator, session),
         [],
       );
-      const nextSelections = Object.fromEntries(
-        Object.entries(state.remoteSelections).filter(([sessionId]) =>
-          sessions.some((session) => session.session_id === sessionId),
-        ),
-      );
+      const nextSelections = buildRemoteSelections(sessions, state.remoteSelections);
       const fallbackActive =
         state.activePaneId && nextPanes.some((pane) => pane.sessionId === state.activePaneId)
           ? state.activePaneId
@@ -137,6 +143,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         panes,
         activePaneId: session.session_id,
         centerSessionId,
+        remoteSelections: {
+          ...state.remoteSelections,
+          [session.session_id]: state.remoteSelections[session.session_id] ?? EMPTY_PATHS,
+        },
       };
     }),
   closePane: (sessionId) =>

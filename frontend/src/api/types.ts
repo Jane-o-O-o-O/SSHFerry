@@ -20,13 +20,50 @@ export interface HealthResponse {
   session_count: number;
   startup_error: string | null;
   auth_required: boolean;
-  auth_header_name: string;
+  auth_header_name: string | null;
+  auth_mode: string;
+  runtime_mode: 'local-dev' | 'deployed-web';
+  access_cookie_name: string;
+  refresh_cookie_name: string;
+  workspace_root: string;
+  features?: string[];
 }
 
 export interface AuthSessionResponse {
   token: string;
   header_name: string;
   token_type: string;
+}
+
+export interface AuthUserResponse {
+  id: string;
+  username: string;
+  display_name: string;
+  role: 'owner' | 'operator' | 'viewer' | string;
+  auth_scheme: string;
+  session_id: string;
+  session_expires_at: number;
+}
+
+export interface AuthCaptchaResponse {
+  captcha_id: string;
+  image_svg: string;
+  expires_at: number;
+}
+
+export interface AuthLoginRequest {
+  username: string;
+  password: string;
+  captcha_id: string;
+  captcha_code: string;
+}
+
+export interface AuthSignupRequest {
+  username: string;
+  password: string;
+  display_name?: string | null;
+  captcha_id: string;
+  captcha_code: string;
 }
 
 export interface SiteUpsertRequest {
@@ -60,6 +97,7 @@ export interface SiteResponse {
   ssh_options: string[];
   default_transfer_protocol: TransferProtocol;
   has_password: boolean;
+  has_key_passphrase: boolean;
 }
 
 export interface ConnectionCheckRequest {
@@ -120,6 +158,51 @@ export interface LocalListResponse {
   parent_path: string | null;
   items: LocalEntry[];
   total: number;
+}
+
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  mtime: number;
+  exists: boolean;
+}
+
+export interface WorkspaceListResponse {
+  current_path: string;
+  parent_path: string | null;
+  items: WorkspaceEntry[];
+  total: number;
+}
+
+export interface WorkspaceStatResponse {
+  entry: WorkspaceEntry;
+  file_count: number;
+  dir_count: number;
+  total_size: number;
+}
+
+export interface WorkspaceUploadResponse {
+  target_path: string;
+  uploaded_paths: string[];
+  total: number;
+}
+
+export interface WorkspaceDeleteResponse {
+  deleted_paths: string[];
+  total: number;
+}
+
+export interface WorkspaceResetResponse {
+  deleted_site_count: number;
+  closed_session_count: number;
+  canceled_task_count: number;
+  cleared_task_count: number;
+  cleared_activity_count: number;
+  workspace_file_count: number;
+  workspace_dir_count: number;
+  workspace_total_size: number;
 }
 
 export interface RemoteEntry {
@@ -214,6 +297,31 @@ export interface LogSnapshotMessage {
 }
 
 export type LogSocketMessage = LogSnapshotMessage | TaskSocketErrorMessage;
+
+export interface ActivityItem {
+  sequence: number;
+  timestamp: number;
+  level: string;
+  category: string;
+  action: string;
+  title: string;
+  message: string;
+}
+
+export interface ActivityListResponse {
+  items: ActivityItem[];
+  total: number;
+  sequence: number;
+}
+
+export interface ActivitySnapshotMessage {
+  type: 'activity_snapshot';
+  items: ActivityItem[];
+  total: number;
+  sequence: number;
+}
+
+export type ActivitySocketMessage = ActivitySnapshotMessage | TaskSocketErrorMessage;
 
 export interface ApiListResponse<T> {
   items: T[];
