@@ -221,13 +221,13 @@ export function LandingPage() {
         </a>
       </section>
 
-      <footer className="landing-footer" aria-label="Wisnflo company information">
+      <footer className="landing-footer" aria-label="FerryLayer company information">
         <div className="landing-footer-brand">
-          <span className="landing-footer-mark">W</span>
+          <span className="landing-footer-mark">FL</span>
           <div>
-            <strong>Wisnflo</strong>
-            <span>Wisnflo Technology Pte. Ltd.</span>
-            <span>68 Circular Road, #02-01, Singapore 049422</span>
+            <strong>FerryLayer</strong>
+            <span>FerryLayer Technology Pte. Ltd.</span>
+            <span>12 Marina Boulevard, #17-01, Singapore 018982</span>
             <span>Singapore</span>
           </div>
         </div>
@@ -244,11 +244,11 @@ export function LandingPage() {
           ))}
           <div className="landing-footer-group">
             <strong>Contact</strong>
-            <a href="mailto:contact@wisnflo.tech">contact@wisnflo.tech</a>
+            <a href="mailto:contact@sshferry.cloud">contact@sshferry.cloud</a>
           </div>
         </div>
         <div className="landing-footer-bottom">
-          <span>© 2026 Wisnflo Technology Pte. Ltd. All rights reserved.</span>
+          <span>&copy; 2026 FerryLayer Technology Pte. Ltd. All rights reserved.</span>
         </div>
       </footer>
     </main>
