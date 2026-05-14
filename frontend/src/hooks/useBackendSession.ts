@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
 
 import { getCurrentUser, getHealth } from '../api/auth';
@@ -24,7 +25,10 @@ export function useAuthBootstrap() {
         const user = await getCurrentUser();
         return { health, user };
       } catch (error) {
-        if (error instanceof ApiError && error.status === 401) {
+        if (
+          (error instanceof ApiError && error.status === 401) ||
+          (axios.isAxiosError(error) && error.response?.status === 401)
+        ) {
           return { health, user: null };
         }
         throw error;
