@@ -101,6 +101,12 @@ export function getErrorMessage(error: unknown, fallback = translate('http.reque
   if (error instanceof ApiError) {
     return error.detail;
   }
+  if (axios.isAxiosError<{ detail?: string }>(error)) {
+    const detail = error.response?.data?.detail;
+    if (detail) {
+      return detail;
+    }
+  }
   if (error instanceof Error) {
     return error.message;
   }
