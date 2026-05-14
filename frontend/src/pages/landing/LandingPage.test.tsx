@@ -20,5 +20,8 @@ describe('LandingPage', () => {
     expect(html).toContain('contact@sshferry.cloud');
     expect(html).toContain('Sample operations panel');
     expect(html).toContain('2.8 TB');
+    expect(html).toContain('Wisnflo Technology Pte. Ltd.');
+    expect(html).toContain('contact@wisnflo.tech');
+    expect(html).toContain('68 Circular Road');
   });
 });

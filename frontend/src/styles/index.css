@@ -2106,6 +2106,79 @@ a {
   color: #172227;
 }
 
+.landing-footer {
+  display: grid;
+  gap: 34px;
+  margin: 0 clamp(20px, 5vw, 72px);
+  padding: 34px clamp(20px, 4vw, 54px) 28px;
+  border-top: 1px solid rgba(247, 244, 238, 0.18);
+  background: #172227;
+  color: #f7f4ee;
+}
+
+.landing-footer-brand {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.landing-footer-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(247, 244, 238, 0.36);
+  background: rgba(247, 244, 238, 0.08);
+  color: #9bd0d0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.landing-footer-brand div,
+.landing-footer-group {
+  display: grid;
+  gap: 8px;
+}
+
+.landing-footer-brand strong {
+  font-size: 24px;
+}
+
+.landing-footer-brand span,
+.landing-footer-group a,
+.landing-footer-bottom {
+  color: rgba(247, 244, 238, 0.72);
+}
+
+.landing-footer-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.landing-footer-group strong {
+  color: #f7f4ee;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.landing-footer-group a {
+  width: fit-content;
+}
+
+.landing-footer-group a:hover {
+  color: #9bd0d0;
+}
+
+.landing-footer-bottom {
+  padding-top: 22px;
+  border-top: 1px solid rgba(247, 244, 238, 0.14);
+  font-size: 13px;
+}
+
 @media (max-width: 980px) {
   .landing-hero,
   .landing-pillar-grid,
@@ -2129,6 +2202,10 @@ a {
     align-items: stretch;
   }
 
+  .landing-footer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .landing-metric-grid,
   .landing-ops-row {
     grid-template-columns: 1fr 1fr;
@@ -2150,7 +2227,8 @@ a {
   .landing-hero,
   .landing-band,
   .landing-section,
-  .landing-cta {
+  .landing-cta,
+  .landing-footer {
     max-width: 100vw;
   }
 
@@ -2177,7 +2255,8 @@ a {
 
   .landing-band,
   .landing-section,
-  .landing-cta {
+  .landing-cta,
+  .landing-footer {
     width: calc(100vw - 48px);
     margin-right: 28px;
     margin-left: 20px;
@@ -2265,5 +2344,18 @@ a {
 
   .landing-pillar {
     min-height: auto;
+  }
+
+  .landing-footer {
+    gap: 28px;
+    padding-bottom: 24px;
+  }
+
+  .landing-footer-brand {
+    flex-direction: column;
+  }
+
+  .landing-footer-grid {
+    grid-template-columns: 1fr;
   }
 }

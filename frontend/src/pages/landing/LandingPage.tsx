@@ -28,6 +28,21 @@ const productPillars = [
 
 const workflowSteps = ['Connect', 'Stage', 'Transfer', 'Verify'];
 
+const footerGroups = [
+  {
+    title: 'Company',
+    links: ['About', 'Contact'],
+  },
+  {
+    title: 'Solutions',
+    links: ['Technology'],
+  },
+  {
+    title: 'Industries',
+    links: ['Industries', 'Privacy Policy'],
+  },
+];
+
 export function LandingPage() {
   return (
     <main className="landing-page">
@@ -205,6 +220,37 @@ export function LandingPage() {
           Enter Workspace
         </a>
       </section>
+
+      <footer className="landing-footer" aria-label="Wisnflo company information">
+        <div className="landing-footer-brand">
+          <span className="landing-footer-mark">W</span>
+          <div>
+            <strong>Wisnflo</strong>
+            <span>Wisnflo Technology Pte. Ltd.</span>
+            <span>68 Circular Road, #02-01, Singapore 049422</span>
+            <span>Singapore</span>
+          </div>
+        </div>
+        <div className="landing-footer-grid">
+          {footerGroups.map((group) => (
+            <div className="landing-footer-group" key={group.title}>
+              <strong>{group.title}</strong>
+              {group.links.map((link) => (
+                <a href="/" key={link}>
+                  {link}
+                </a>
+              ))}
+            </div>
+          ))}
+          <div className="landing-footer-group">
+            <strong>Contact</strong>
+            <a href="mailto:contact@wisnflo.tech">contact@wisnflo.tech</a>
+          </div>
+        </div>
+        <div className="landing-footer-bottom">
+          <span>© 2026 Wisnflo Technology Pte. Ltd. All rights reserved.</span>
+        </div>
+      </footer>
     </main>
   );
 }
