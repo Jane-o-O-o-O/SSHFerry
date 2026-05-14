@@ -22,6 +22,8 @@ describe('LandingPage', () => {
     expect(html).toContain('2.8 TB');
     expect(html).toContain('FerryLayer Technology Pte. Ltd.');
     expect(html).toContain('contact@sshferry.cloud');
-    expect(html).toContain('12 Marina Boulevard');
+    expect(html).toContain('Herengracht 220');
+    expect(html).toContain('1016 BH Amsterdam');
+    expect(html).toContain('Netherlands');
   });
 });

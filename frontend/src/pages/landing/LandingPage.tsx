@@ -227,8 +227,8 @@ export function LandingPage() {
           <div>
             <strong>FerryLayer</strong>
             <span>FerryLayer Technology Pte. Ltd.</span>
-            <span>12 Marina Boulevard, #17-01, Singapore 018982</span>
-            <span>Singapore</span>
+            <span>Herengracht 220, 1016 BH Amsterdam</span>
+            <span>Netherlands</span>
           </div>
         </div>
         <div className="landing-footer-grid">
