@@ -4,6 +4,7 @@ import { OwnerRoute } from '../components/auth/OwnerRoute';
 import { ProtectedRoute } from '../components/auth/ProtectedRoute';
 import { BootstrapPage } from '../pages/bootstrap/BootstrapPage';
 import { RouteErrorPage } from '../pages/error/RouteErrorPage';
+import { LandingPage } from '../pages/landing/LandingPage';
 import { LoginPage } from '../pages/login/LoginPage';
 import { SignUpPage } from '../pages/login/SignUpPage';
 import { LogsPage } from '../pages/logs/LogsPage';
@@ -14,7 +15,7 @@ import { WorkspacePage } from '../pages/workspace/WorkspacePage';
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <BootstrapPage />,
+    element: <LandingPage />,
     errorElement: <RouteErrorPage />,
   },
   {
