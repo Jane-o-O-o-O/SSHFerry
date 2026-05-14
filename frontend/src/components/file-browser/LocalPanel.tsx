@@ -171,6 +171,8 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
         size: formatBytes(statsQuery.data.total_size),
       })
     : null;
+  const headerTitle = isDirectLocalMode ? t('localPanel.localModeTitle') : t('localPanel.title');
+  const headerDescription = isDirectLocalMode ? t('localPanel.localModeDescription') : t('localPanel.description');
 
   useEffect(() => {
     if (!isDirectLocalMode || localCurrentPath || !localDrivesQuery.data?.items.length) {
@@ -394,9 +396,15 @@ export function LocalPanel({ onQueueDownloads }: LocalPanelProps) {
     <section className="panel-shell local-panel">
       <header className="panel-header local-panel-header">
         <div className="local-panel-header-copy">
-          <h3>{isDirectLocalMode ? t('localPanel.localModeTitle') : t('localPanel.title')}</h3>
-          <p>{isDirectLocalMode ? t('localPanel.localModeDescription') : t('localPanel.description')}</p>
-          {summary ? <p className="mono-cell">{summary}</p> : null}
+          <h3 title={headerTitle}>{headerTitle}</h3>
+          <p className="local-panel-description" title={headerDescription}>
+            {headerDescription}
+          </p>
+          {summary ? (
+            <p className="mono-cell local-panel-summary" title={summary}>
+              {summary}
+            </p>
+          ) : null}
         </div>
         <div className="local-panel-actions">
           <button

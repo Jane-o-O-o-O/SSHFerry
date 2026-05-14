@@ -473,6 +473,26 @@ a {
 
 .local-panel-header-copy {
   min-width: 0;
+  overflow: hidden;
+}
+
+.local-panel-header-copy h3,
+.local-panel-description,
+.local-panel-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-panel-description,
+.local-panel-summary {
+  display: block;
+  max-width: 100%;
+}
+
+.local-panel-summary {
+  margin-top: 4px;
 }
 
 .local-panel-actions {
