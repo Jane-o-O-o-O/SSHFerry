@@ -17,5 +17,8 @@ describe('LandingPage', () => {
     expect(html).toContain('Secure SSH file operations');
     expect(html).toContain('href="/login"');
     expect(html).toContain('href="/signup"');
+    expect(html).toContain('contact@sshferry.cloud');
+    expect(html).toContain('Sample operations panel');
+    expect(html).toContain('2.8 TB');
   });
 });

@@ -1,7 +1,14 @@
 const operatingSignals = [
-  { label: 'Active sessions', value: '08' },
+  { label: 'Active sessions', value: '24' },
   { label: 'Transfer lanes', value: 'SFTP / SCP / Parallel' },
-  { label: 'Boundary mode', value: 'remote_root' },
+  { label: 'Queued volume', value: '2.8 TB' },
+];
+
+const sampleMetrics = [
+  { label: 'Managed sites', value: '128' },
+  { label: 'Monthly transfer volume', value: '42.6 TB' },
+  { label: 'Completed tasks', value: '18,420' },
+  { label: 'Median operator action', value: '3.2 min' },
 ];
 
 const productPillars = [
@@ -33,6 +40,7 @@ export function LandingPage() {
         </a>
         <nav className="landing-nav-links" aria-label="Homepage links">
           <a href="#capabilities">Capabilities</a>
+          <a href="#operations">Operations</a>
           <a href="#workflow">Workflow</a>
           <a href="/login">Log in</a>
         </nav>
@@ -54,6 +62,9 @@ export function LandingPage() {
               Create Account
             </a>
           </div>
+          <a href="mailto:contact@sshferry.cloud" className="landing-contact-link">
+            contact@sshferry.cloud
+          </a>
         </div>
 
         <div className="landing-visual" aria-label="SSHFerry product transfer workspace preview">
@@ -102,6 +113,56 @@ export function LandingPage() {
         </div>
       </section>
 
+      <section className="landing-section landing-operations" id="operations">
+        <div className="landing-section-head">
+          <p className="landing-kicker">Sample operations panel</p>
+          <h2>Enterprise-style visibility for SSH transfer teams</h2>
+        </div>
+        <div className="landing-ops-shell" aria-label="Illustrative SSHFerry operations metrics">
+          <div className="landing-ops-header">
+            <div>
+              <span>Fleet overview</span>
+              <strong>Production transfer workspace</strong>
+            </div>
+            <span className="landing-ops-badge">Illustrative sample data</span>
+          </div>
+          <div className="landing-metric-grid">
+            {sampleMetrics.map((metric) => (
+              <div className="landing-metric" key={metric.label}>
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="landing-ops-table" aria-label="Sample transfer activity">
+            <div className="landing-ops-row landing-ops-row-head">
+              <span>Environment</span>
+              <span>Route</span>
+              <span>Status</span>
+              <span>Volume</span>
+            </div>
+            <div className="landing-ops-row">
+              <span>Release</span>
+              <span>build-cache to cn-prod-02</span>
+              <span>Verified</span>
+              <span>860 GB</span>
+            </div>
+            <div className="landing-ops-row">
+              <span>Analytics</span>
+              <span>eu-reporting to archive</span>
+              <span>Running</span>
+              <span>1.4 TB</span>
+            </div>
+            <div className="landing-ops-row">
+              <span>Backup</span>
+              <span>ops-node-07 to cold-store</span>
+              <span>Queued</span>
+              <span>540 GB</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className="landing-section" id="capabilities">
         <div className="landing-section-head">
           <p className="landing-kicker">Capabilities</p>
@@ -136,6 +197,9 @@ export function LandingPage() {
         <div>
           <p className="landing-kicker">Workspace ready</p>
           <h2>Move from scattered terminal transfers to a controlled SSH operations surface.</h2>
+          <a href="mailto:contact@sshferry.cloud" className="landing-cta-contact">
+            contact@sshferry.cloud
+          </a>
         </div>
         <a href="/login" className="landing-primary-action">
           Enter Workspace
