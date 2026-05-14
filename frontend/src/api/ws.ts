@@ -1,13 +1,20 @@
 import type { ActivitySocketMessage, LogSocketMessage, TaskSocketMessage } from './types';
 
-const DEFAULT_WS_URL = 'ws://127.0.0.1:18080';
 const TASK_SOCKET_PATH = '/api/ws/tasks';
 const ACTIVITY_SOCKET_PATH = '/api/ws/activity';
 const LOG_SOCKET_PATH = '/api/ws/logs';
 const DRAG_MIME = 'application/x-sshferry-transfer';
 
+function getDefaultSocketBase(): string {
+  if (typeof window === 'undefined') {
+    return 'ws://127.0.0.1:18080';
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}`;
+}
+
 function buildSocketUrl(path: string): string {
-  const base = import.meta.env.VITE_BACKEND_WS_URL ?? DEFAULT_WS_URL;
+  const base = import.meta.env.VITE_BACKEND_WS_URL || getDefaultSocketBase();
   const url = new URL(path, `${base.replace(/\/$/, '')}/`);
   return url.toString();
 }

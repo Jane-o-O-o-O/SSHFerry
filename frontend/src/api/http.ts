@@ -21,12 +21,11 @@ interface RetryableRequestConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
 }
 
-const DEFAULT_HTTP_URL = 'http://127.0.0.1:18080';
 const AUTH_PATH_PREFIX = '/api/auth/';
 
 function createClient() {
   return axios.create({
-    baseURL: import.meta.env.VITE_BACKEND_HTTP_URL ?? DEFAULT_HTTP_URL,
+    baseURL: import.meta.env.VITE_BACKEND_HTTP_URL || '',
     timeout: 20000,
     withCredentials: true,
   });
