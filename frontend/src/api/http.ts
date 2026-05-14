@@ -31,6 +31,27 @@ function createClient() {
   });
 }
 
+function formatApiDetail(detail: unknown): string | null {
+  if (typeof detail === 'string') {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item;
+        }
+        if (item && typeof item === 'object' && 'msg' in item && typeof item.msg === 'string') {
+          return item.msg;
+        }
+        return null;
+      })
+      .filter((message): message is string => Boolean(message));
+    return messages.length ? messages.join('\n') : null;
+  }
+  return null;
+}
+
 export const baseHttp = createClient();
 export const http = createClient();
 
@@ -66,8 +87,8 @@ async function refreshOnce(): Promise<void> {
 
 http.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError<{ detail?: string }>) => {
-    const detail = error.response?.data?.detail || error.message || translate('http.requestFailed');
+  async (error: AxiosError<{ detail?: unknown }>) => {
+    const detail = formatApiDetail(error.response?.data?.detail) || error.message || translate('http.requestFailed');
     const apiError = new ApiError(detail, error.response?.status);
     const originalRequest = error.config as RetryableRequestConfig | undefined;
 
@@ -101,8 +122,8 @@ export function getErrorMessage(error: unknown, fallback = translate('http.reque
   if (error instanceof ApiError) {
     return error.detail;
   }
-  if (axios.isAxiosError<{ detail?: string }>(error)) {
-    const detail = error.response?.data?.detail;
+  if (axios.isAxiosError<{ detail?: unknown }>(error)) {
+    const detail = formatApiDetail(error.response?.data?.detail);
     if (detail) {
       return detail;
     }

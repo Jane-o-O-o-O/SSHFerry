@@ -13,7 +13,7 @@ PASSWORD_ITERATIONS=600_000
 ROLE_OWNER='owner'
 ROLE_OPERATOR='operator'
 LOCAL_DEV_USER_ID='local-dev-owner'
-USERNAME_PATTERN=re.compile(r'^[a-zA-Z0-9_.-]{3,32}$')
+USERNAME_PATTERN=re.compile(r'^(?=.{3,254}$)[a-zA-Z0-9_.@+-]+$')
 CAPTCHA_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 CAPTCHA_TTL_SECONDS=5*60
 MIN_PASSWORD_LENGTH=8
@@ -417,7 +417,7 @@ class AuthService:
         if not normalized:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Username is required.')
         if not USERNAME_PATTERN.fullmatch(normalized):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Username must be 3-32 characters and contain only letters, numbers, dot, dash, or underscore.')
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Username must be 3-254 characters and contain only letters, numbers, dot, dash, underscore, plus, or at sign.')
         return normalized
     @staticmethod
     def _normalize_display_name(display_name:str|None, fallback_username:str)->str:

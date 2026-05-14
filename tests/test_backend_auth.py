@@ -137,6 +137,35 @@ def test_deployed_web_signup_login_me_refresh_logout_flow():
         assert me_after_owner_login.json()['role'] == 'owner'
     _run_in_temp_store('deployed-web-flow', runner)
 
+def test_deployed_web_signup_accepts_email_username():
+    def runner(store_path: Path, base_dir: Path):
+        env = {
+            'SSHFERRY_RUNTIME_MODE': 'deployed-web',
+            'SSHFERRY_OWNER_USERNAME': 'owner',
+            'SSHFERRY_OWNER_PASSWORD': 'secret-pass-123',
+            'SSHFERRY_OWNER_FILE': str(base_dir / 'owner.json'),
+            'SSHFERRY_USERS_FILE': str(base_dir / 'users.json'),
+            'SSHFERRY_AUTH_COOKIE_SECURE': 'false',
+        }
+        with patch.dict(os.environ, env, clear=False):
+            state = _build_state(store_path)
+            app = create_app(app_state_factory=lambda: state)
+            with TestClient(app) as client:
+                captcha = _issue_captcha_payload(client)
+                signup = client.post(
+                    '/api/auth/signup',
+                    json={
+                        'username': 'i@jane-zz.me',
+                        'password': 'secret-pass-456',
+                        'display_name': 'Jane',
+                        **captcha,
+                    },
+                )
+        assert signup.status_code == 201
+        assert signup.json()['username'] == 'i@jane-zz.me'
+
+    _run_in_temp_store('deployed-web-email-signup', runner)
+
 def test_cors_preflight_allows_local_dev_origin():
     def runner(store_path: Path, _: Path):
         state = _build_state(store_path)
